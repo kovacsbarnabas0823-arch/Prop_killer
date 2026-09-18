@@ -1,0 +1,309 @@
+{
+  "prop_firms": {
+    "tradeify": {
+      "standard": {
+        "25k": {
+          "evaluation": {
+            "account_size": 25000,
+            "retail_price": 109,
+            "sale_price": 65,
+            "promo_code": "SEP",
+            "payment_type": "one_time",
+            "profit_target": 1500,
+            "trailing_max_drawdown_eod": 1000,
+            "daily_loss_limit": null,
+            "reset_fee": 75,
+            "max_resets_per_month": 10,
+            "consistency_rule_pct": 40,
+            "activation_fee": 0,
+            "max_contracts": { "minis": 1, "micros": 10 }
+          },
+          "funded": {
+            "account_size": 25000,
+            "activation_fee": 0,
+            "paths": {
+              "daily": {
+                "payout_frequency": "Daily",
+                "max_payout": 600,
+                "consistency_rule_pct": null,
+                "daily_loss_limit": 500,
+                "max_drawdown_eod": 1000
+              },
+              "flex": {
+                "payout_frequency": "5 days",
+                "max_payout": 1250,
+                "consistency_rule_pct": null,
+                "daily_loss_limit": null,
+                "max_drawdown_eod": 1000
+              }
+            }
+          }
+        },
+        "50k": {
+          "evaluation": {
+            "account_size": 50000,
+            "retail_price": 145,
+            "sale_price": 87,
+            "promo_code": "SEP",
+            "payment_type": "one_time",
+            "profit_target": 3000,
+            "trailing_max_drawdown_eod": 2000,
+            "daily_loss_limit": 1250,
+            "reset_fee": 95,
+            "consistency_rule_pct": null,
+            "activation_fee": 0,
+            "max_contracts": { "minis": 4, "micros": 40 }
+          },
+          "funded": {
+            "account_size": 50000,
+            "retail_price": 145,
+            "sale_price": 87,
+            "payout_frequency": "5 Days",
+            "max_accounts": 5,
+            "consistency_rule_pct": 35,
+            "daily_loss_limit": 1250,
+            "max_drawdown_eod": 2000,
+            "activation_fee": 0,
+            "max_contracts": { "minis": 4, "micros": 40 }
+          }
+        },
+        "100k": {
+          "evaluation": {
+            "account_size": 100000,
+            "retail_price": 265,
+            "sale_price": 159,
+            "promo_code": "SEP",
+            "payment_type": "one_time",
+            "profit_target": 6000,
+            "trailing_max_drawdown_eod": 3000,
+            "daily_loss_limit": null,
+            "reset_fee": 169,
+            "max_resets_per_month": 10,
+            "consistency_rule_pct": 40,
+            "activation_fee": 0,
+            "max_contracts": { "minis": 8, "micros": 80 }
+          },
+          "funded": {
+            "account_size": 100000,
+            "activation_fee": 0,
+            "paths": {
+              "daily": {
+                "payout_frequency": "Daily",
+                "max_payout": 1750,
+                "consistency_rule_pct": null,
+                "daily_loss_limit": 1250,
+                "max_drawdown_eod": 2500
+              },
+              "flex": {
+                "payout_frequency": "5 days",
+                "max_payout": 3500,
+                "consistency_rule_pct": null,
+                "daily_loss_limit": null,
+                "max_drawdown_eod": 3000
+              }
+            }
+          }
+        },
+        "150k": {
+          "evaluation": {
+            "account_size": 150000,
+            "retail_price": 369,
+            "sale_price": 221,
+            "promo_code": "SEP",
+            "payment_type": "one_time",
+            "profit_target": 9000,
+            "trailing_max_drawdown_eod": 4500,
+            "daily_loss_limit": null,
+            "reset_fee": 239,
+            "max_resets_per_month": 10,
+            "consistency_rule_pct": 40,
+            "activation_fee": 0,
+            "max_contracts": { "minis": 12, "micros": 120 }
+          },
+          "funded": {
+            "account_size": 150000,
+            "activation_fee": 0,
+            "paths": {
+              "daily": {
+                "payout_frequency": "Daily",
+                "max_payout": 2500,
+                "consistency_rule_pct": null,
+                "daily_loss_limit": 1750,
+                "max_drawdown_eod": 4000
+              },
+              "flex": {
+                "payout_frequency": "5 days",
+                "max_payout": 5000,
+                "consistency_rule_pct": null,
+                "daily_loss_limit": null,
+                "max_drawdown_eod": 4500
+              }
+            }
+          }
+        }
+      },
+      "growth": {
+        "50k": {
+          "evaluation": {
+            "account_size": 50000,
+            "retail_price": 145,
+            "sale_price": 87,
+            "promo_code": "SEP",
+            "payment_type": "one_time",
+            "profit_target": 3000,
+            "trailing_max_drawdown_eod": 2000,
+            "daily_loss_limit": 1250,
+            "daily_loss_limit_note": "Increases to Trailing Max Drawdown when account profit hits 6%",
+            "reset_fee": 95,
+            "consistency_rule_pct": null,
+            "activation_fee": 0,
+            "max_contracts": { "minis": 4, "micros": 40 }
+          },
+          "funded": {
+            "account_size": 50000,
+            "payout_frequency": "5 Days",
+            "max_accounts": 5,
+            "consistency_rule_pct": 35,
+            "daily_loss_limit": 1250,
+            "daily_loss_limit_note": "Increases to Trailing Max Drawdown when account profit hits 6%",
+            "max_drawdown_eod": 2000,
+            "max_contracts": { "minis": 4, "micros": 40 }
+          }
+        },
+        "100k": {
+          "evaluation": {
+            "account_size": 100000,
+            "retail_price": 255,
+            "sale_price": 153,
+            "promo_code": "SEP",
+            "payment_type": "one_time",
+            "profit_target": 6000,
+            "trailing_max_drawdown_eod": 3500,
+            "daily_loss_limit": 2500,
+            "daily_loss_limit_note": "Increases to Trailing Max Drawdown when account profit hits 6%",
+            "reset_fee": 169,
+            "consistency_rule_pct": null,
+            "activation_fee": 0,
+            "max_contracts": { "minis": 8, "micros": 80 }
+          },
+          "funded": {
+            "account_size": 100000,
+            "payout_frequency": "5 Days",
+            "max_accounts": 5,
+            "consistency_rule_pct": 35,
+            "daily_loss_limit": 2500,
+            "daily_loss_limit_note": "Increases to Trailing Max Drawdown when account profit hits 6%",
+            "max_drawdown_eod": 3500,
+            "max_contracts": { "minis": 8, "micros": 80 }
+          }
+        },
+        "150k": {
+          "evaluation": {
+            "account_size": 150000,
+            "retail_price": 369,
+            "sale_price": 221,
+            "promo_code": "SEP",
+            "payment_type": "one_time",
+            "profit_target": 9000,
+            "trailing_max_drawdown_eod": 5000,
+            "daily_loss_limit": 3750,
+            "daily_loss_limit_note": "Increases to Trailing Max Drawdown when account profit hits 6%",
+            "reset_fee": 229,
+            "consistency_rule_pct": null,
+            "activation_fee": 0,
+            "max_contracts": { "minis": 12, "micros": 120 }
+          },
+          "funded": {
+            "account_size": 150000,
+            "payout_frequency": "5 Days",
+            "max_accounts": 5,
+            "consistency_rule_pct": 35,
+            "daily_loss_limit": 3750,
+            "daily_loss_limit_note": "Increases to Trailing Max Drawdown when account profit hits 6%",
+            "max_drawdown_eod": 5000,
+            "max_contracts": { "minis": 12, "micros": 120 }
+          }
+        }
+      }
+    },
+    "lucid_trading": {
+      "lucid_pro": {
+        "description": "Standard Evaluation plan with EOD trailing drawdown and 40% payout consistency",
+        "drawdown_type": "EOD_trailing",
+        "profit_split_pct": 90,
+        "consistency_rule_pct": 40,
+        "subscription_type": "one_time_fee",
+        "tiers": {
+          "25k": {
+            "account_size": 25000,
+            "profit_target": 1250,
+            "trailing_max_drawdown_eod": 1000,
+            "daily_loss_limit": null,
+            "max_contracts": { "minis": 2, "micros": 20 }
+          },
+          "50k": {
+            "account_size": 50000,
+            "profit_target": 3000,
+            "trailing_max_drawdown_eod": 2000,
+            "daily_loss_limit": 1200,
+            "max_contracts": { "minis": 4, "micros": 40 }
+          },
+          "100k": {
+            "account_size": 100000,
+            "profit_target": 6000,
+            "trailing_max_drawdown_eod": 3000,
+            "daily_loss_limit": 1800,
+            "max_contracts": { "minis": 6, "micros": 60 }
+          },
+          "150k": {
+            "account_size": 150000,
+            "profit_target": 9000,
+            "trailing_max_drawdown_eod": 4500,
+            "daily_loss_limit": 2700,
+            "max_contracts": { "minis": 10, "micros": 100 }
+          }
+        }
+      },
+      "lucid_flex": {
+        "description": "Flexible path with no daily loss limit, no funded consistency rule, EOD trailing drawdown",
+        "drawdown_type": "EOD_trailing",
+        "profit_split_pct": 90,
+        "consistency_rule_pct": null,
+        "daily_loss_limit": null,
+        "subscription_type": "one_time_fee",
+        "tiers": {
+          "25k": { "account_size": 25000, "profit_target": 1250, "trailing_max_drawdown_eod": 1000, "max_contracts": { "minis": 2, "micros": 20 } },
+          "50k": { "account_size": 50000, "profit_target": 3000, "trailing_max_drawdown_eod": 2000, "max_contracts": { "minis": 4, "micros": 40 } },
+          "100k": { "account_size": 100000, "profit_target": 6000, "trailing_max_drawdown_eod": 3000, "max_contracts": { "minis": 6, "micros": 60 } },
+          "150k": { "account_size": 150000, "profit_target": 9000, "trailing_max_drawdown_eod": 4500, "max_contracts": { "minis": 10, "micros": 100 } }
+        }
+      },
+      "lucid_daily": {
+        "description": "Daily payout path with intraday trailing drawdown for funded accounts",
+        "drawdown_type": "intraday_trailing",
+        "profit_split_pct": 90,
+        "payout_frequency": "Daily",
+        "subscription_type": "one_time_fee",
+        "tiers": {
+          "25k": { "account_size": 25000, "profit_target": 1250, "max_drawdown_intraday": 1000, "max_contracts": { "minis": 2, "micros": 20 } },
+          "50k": { "account_size": 50000, "profit_target": 3000, "max_drawdown_intraday": 2000, "max_contracts": { "minis": 4, "micros": 40 } },
+          "100k": { "account_size": 100000, "profit_target": 6000, "max_drawdown_intraday": 3000, "max_contracts": { "minis": 6, "micros": 60 } },
+          "150k": { "account_size": 150000, "profit_target": 9000, "max_drawdown_intraday": 4500, "max_contracts": { "minis": 10, "micros": 100 } }
+        }
+      },
+      "lucid_direct": {
+        "description": "Direct-to-Funded (instant funding without evaluation), 20% consistency rule, EOD trailing drawdown",
+        "drawdown_type": "EOD_trailing",
+        "profit_split_pct": 90,
+        "consistency_rule_pct": 20,
+        "subscription_type": "direct_purchase",
+        "tiers": {
+          "25k": { "account_size": 25000, "trailing_max_drawdown_eod": 1000, "max_contracts": { "minis": 2, "micros": 20 } },
+          "50k": { "account_size": 50000, "trailing_max_drawdown_eod": 2000, "max_contracts": { "minis": 4, "micros": 40 } },
+          "100k": { "account_size": 100000, "trailing_max_drawdown_eod": 3000, "max_contracts": { "minis": 6, "micros": 60 } },
+          "150k": { "account_size": 150000, "trailing_max_drawdown_eod": 4500, "max_contracts": { "minis": 10, "micros": 100 } }
+        }
+      }
+    }
+  }
+}

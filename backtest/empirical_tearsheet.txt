@@ -1,0 +1,37 @@
+=====================================================================================
+INSTITUTIONAL QUANTITATIVE TEAR SHEET: TWO-TIER FILTERED QUANT ORB VALIDATION
+=====================================================================================
+Data Window               : 2018-01-02 to 2026-09-16 (8.9 Years CME 1-Minute Databento)
+Strategy Architecture     : Filtered Quant ORB (14d ATR Exhaustion + HTF 20 EMA + Retest)
+Execution Model           : Two-Tier Scale-Out (50% @ +1.2R, 50% @ +2.5R runner, +2.0R Profit-Lock)
+Target Prop Account       : Tradeify $50K EOD Trailing Drawdown ($2,000 Barrier)
+-------------------------------------------------------------------------------------
+TRADE METRICS (HISTORICAL OUTCOMES):
+  Total Trades Executed   : 641 (71.9 trades / year)
+  Breakout Entries        : 266 trades (41.5%)
+  Secondary Retest Entries: 375 trades (58.5%)
+  ATR Exhausted Aborts    : 311 / 2,246 sessions (13.8%)
+  Win Rate                : 52.57% (337 Wins / 304 Losses)
+  Profit Factor           : 1.38
+  Total Net Realized PnL  : $16,567.04 (net of $1.24 comms + 0.50 slippage)
+  Average Win             : $178.27
+  Average Loss            : -$143.13
+  Average Win/Loss Ratio  : 1.25
+  Trade Expectancy        : $25.85 per trade
+-------------------------------------------------------------------------------------
+TWO-TIER SCALE-OUT & RISK MANAGEMENT METRICS:
+  Leg 1 Scale-Outs Filled : 323 trades (50.4% locked +1.2R early cash)
+  Scale-Out + BE Scratches: 101 trades (15.8% banked +0.6R net profit)
+  Scale-Out + Profit-Lock : 47 trades (7.3% locked +1.1R gain on +2.0R expansion)
+  Scale-Out + Full Runner : 135 trades (21.1% achieved +1.85R full target)
+  Full Stop-Loss Exits    : 301 trades (47.0%)
+  Max Historical Drawdown : $1,475.28 (strictly contained within $2,000 barrier)
+-------------------------------------------------------------------------------------
+EMPIRICAL MONTE CARLO RATCHET SIMULATION (5,000 BOOTSTRAP PATHS):
+  Empirical Pass Rate     : 88.56%
+  Average Days to Pass    : 103.0 trading days
+  Account Challenge Fee   : $82.50
+  Expected Payout EV      : $4,000.00
+  Expected Value (EV)     : $3,532.96
+  ★ EV VELOCITY ($EV/d)   : $34.31 / day
+=====================================================================================

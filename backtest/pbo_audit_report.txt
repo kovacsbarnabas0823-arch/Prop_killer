@@ -1,0 +1,49 @@
+
+=====================================================================================
+INSTITUTIONAL AUDIT REPORT: PROBABILITY OF BACKTEST OVERFITTING (PBO)
+=====================================================================================
+Data Window                  : 2018-01-02 to 2026-09-16 (2,246 Daily Sessions)
+Model Search Space           : 45 Distinct Parameter Configurations (Leaderboard Grid)
+CSCV Partitioning            : S = 16 Chronological Blocks (140.4 days / block)
+Combinatorial Paths (M)      : binom(16, 8) = 12,870 Symmetrically Balanced Splits
+-------------------------------------------------------------------------------------
+PBO STATISTICAL AUDIT METRICS:
+  1. ANNUALIZED SHARPE RATIO CRITERION:
+     ★ Empirical PBO         : 29.68% (Target: < 20.00% | STATUS: FAIL)
+     ★ Probability of Loss   : 0.19% (Target: < 5.00%  | STATUS: PASS)
+     • Median OOS Rank (R_OOS): 0.6522 (Above 0.50 indicates strong generalization)
+     • Mean OOS Rank         : 0.6282
+     • OOS Logit Mean (λ)    : +0.698 (Standard Deviation: 1.375)
+
+  2. DAILY EV VELOCITY ($EV/d) CRITERION:
+     ★ Empirical PBO         : 15.98% (Target: < 20.00% | STATUS: PASS)
+     • Median OOS Rank (R_OOS): 0.6957
+     • Mean OOS Rank         : 0.6701
+     • OOS Logit Mean (λ)    : +0.819
+-------------------------------------------------------------------------------------
+STOCHASTIC DOMINANCE & OVERFITTING LOGIT DISTRIBUTION (SHARPE):
+Bin (Logit)        | Frequency | Distribution (Overfit < 0 < Robust)
+---------------------------------------------------------------------------
+[-3.81, -3.33]     | 23       |  [OVERFIT]
+[-3.33, -2.85]     | 36       | █ [OVERFIT]
+[-2.85, -2.38]     | 150      | ████ [OVERFIT]
+[-2.38, -1.90]     | 243      | ███████ [OVERFIT]
+[-1.90, -1.43]     | 319      | █████████ [OVERFIT]
+[-1.43, -0.95]     | 664      | ███████████████████ [OVERFIT]
+[-0.95, -0.48]     | 1091     | ████████████████████████████████ [OVERFIT]
+[-0.48, +0.00]     | 1590     | ██████████████████████████████████████████████ [MEDIAN] 
+[+0.00, +0.48]     | 1692     | ██████████████████████████████████████████████████ [ROBUST] 
+[+0.48, +0.95]     | 1612     | ███████████████████████████████████████████████ [ROBUST] 
+[+0.95, +1.43]     | 1229     | ████████████████████████████████████ [ROBUST] 
+[+1.43, +1.90]     | 1484     | ███████████████████████████████████████████ [ROBUST] 
+[+1.90, +2.38]     | 1409     | █████████████████████████████████████████ [ROBUST] 
+[+2.38, +2.85]     | 976      | ████████████████████████████ [ROBUST] 
+[+2.85, +3.33]     | 300      | ████████ [ROBUST] 
+[+3.33, +3.81]     | 52       | █ [ROBUST] 
+-------------------------------------------------------------------------------------
+OPTIMAL CONFIGURATION (#1) STABILITY AUDIT: [ATR_0.50_TF_3m_RR_2.5x]
+  • Selected as Best IS Model  : 1.38% of all 12,870 splits
+  • Mean Out-of-Sample Rank    : Top 33.3% percentile across all splits
+  • Positive OOS Sharpe Rate   : 99.86% of all out-of-sample periods
+  • Rank Deterioration Check   : ZERO structural rank deterioration detected out-of-sample.
+=====================================================================================

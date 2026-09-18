@@ -1,0 +1,56 @@
+strategy:
+  name: NQ_Filtered_Quant_ORB
+  instrument: MNQ
+  description: "Filtered Quantitative ORB with HTF 20 EMA Alignment & Dynamic BE"
+  opening_range:
+    rth_start: "09:30"
+    or_end: "10:00"
+  filters:
+    atr_exhaustion:
+      enabled: true
+      lookback_days: 14
+      max_or_atr_ratio: 0.50
+    noise_floor:
+      enabled: true
+      min_or_points: 15.0
+      min_or_atr_ratio: 0.08
+    confirmation_timeframe_minutes: 3
+    vwap_confirmation:
+      anchor_time: "09:30"
+      enabled: true
+    htf_alignment:
+      enabled: true
+      ema_period: 20
+  execution:
+    entry_window_end: "11:30"
+    force_close_time: "15:45"
+    max_trades_per_day: 1
+    break_even:
+      enabled: true
+      trigger_r: 1.2
+      offset_ticks: 2
+    two_tier_scale_out:
+      enabled: true
+      leg1_pct: 0.50
+      tp1_r: 1.2
+      leg2_pct: 0.50
+      tp2_r: 2.5
+      ratchet_trigger: "TP1_FILL"
+    secondary_retest:
+      enabled: true
+      retest_cutoff: "11:15"
+    cross_asset_arbitration:
+      enabled: true
+      primary_asset: "NQ"
+      secondary_asset: "ES"
+      rvol_arbitration_time: "10:00"
+  risk_management:
+    max_stop_points: 60.0
+    min_stop_points: 5.0
+    point_value: 2.0
+    stop_anchor: "OR_Mid"
+    target_rr: 2.5
+    min_contracts: 2
+    even_contracts_only: true
+  time_management:
+    timezone: America/New_York

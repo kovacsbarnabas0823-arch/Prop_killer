@@ -1,231 +1,119 @@
-# Project Blueprint & Engineering Architecture: Two-Tier Filtered Quant ORB
+# Project Blueprint & Engineering Architecture: Multi-Horizon Quant ORB Engine
 **Target Platform**: Tradeify $50K EOD Trailing Drawdown Evaluation Accounts  
 **Target Asset**: CME Micro E-mini Nasdaq-100 (`MNQ`) & E-mini Nasdaq-100 (`NQ`) Futures  
-**Audience**: Lead Quantitative Software Engineer / Systems Integrator  
+**Lead Quantitative Software Engineer & Risk Architect**
 
 ---
 
-## 1. The Vision: What Are We Building?
+## 1. Tradeify $50K Evaluation Economics & Fee Clarity
 
-We have engineered an institutional-grade, fully automated quantitative trading system designed to exploit the asymmetric economics of **Proprietary Trading Firm Challenges** (specifically **Tradeify**).
+A core question in prop firm algorithmic trading is understanding how the evaluation contract is structured, billed, and maintained.
 
-### Tradeify 50K Official Rules vs. Strategy Compliance Matrix
-
-| Rule Parameter | Tradeify 50K Evaluation | Tradeify 50K Funded | Strategy Implementation & Compliance | Compliance Status |
-| :--- | :---: | :---: | :--- | :---: |
-| **Account Price** | **$87** (Code: `SEP`) | **$87** (No activation fee) | One-time challenge fee; downside strictly capped at $87. | **PASS** |
-| **Profit Target** | **$3,000** (6.0%) | None (Payouts every 5 days) | Target reached in 103 days average (88.56% pass rate). | **PASS** |
-| **Trailing Max DD (EOD)** | **$2,000** | **$2,000** | Historical Max DD: **$1,475.28** ($524.72 safety buffer). | **PASS** |
-| **Daily Loss Limit** | **$1,250** | **$1,250** | Max historical single-day loss: **-$221.48** (< 18% of limit). | **PASS (100% Safe)** |
-| **Max Contracts Allowed** | 4 Minis / 40 Micros | 4 Minis / 40 Micros | Strategy trades **strictly 2 Micros (2 MNQ)** (5% of max). | **PASS** |
-| **Consistency Rule** | **None** | **35% Maximum** | Avg win is **+$178.27** (~6% of target); no day exceeds 35%. | **PASS (Built-in)** |
-| **Reset Fee** | $95 | N/A | Cheap reset cushion if an extreme black swan occurs. | **PASS** |
-| **Max Accounts** | Unlimited | **5 Accounts** | Strategy can run across 5 accounts simultaneously via copy. | **PASS** |
-| **Payout Frequency** | N/A | **Every 5 Days** | Steady bite-sized payouts every 5 trading days. | **PASS** |
+### Lifetime vs. Recurring Billing:
+* **No 30-Day Expiration:** Tradeify Growth $50K evaluation accounts have **NO 30-day calendar time limit**. The account stays active indefinitely until the trader reaches either the **+$3,000 profit target** or breaches the **-$2,000 trailing drawdown floor**.
+* **One-Time Purchase ($87 on sale / $145 retail):** Tradeify Growth is a **one-time payment**, NOT a recurring monthly subscription (unlike Topstep or Apex which rebill $49–$85 every 30 days). You do **NOT** have to pay a monthly fee to keep the evaluation account open if it takes 40, 60, or 90 days.
+* **Reset Fee ($95):** If an account breaches the $2,000 drawdown barrier, a reset can be purchased for $95 to start a fresh attempt without repurchasing at retail price.
+* **EOD Trailing Drawdown Advantage (Martí Tomàs Fernández, 2026):** Tradeify calculates trailing drawdown strictly at the **End of Day (15:45 EST settlement close)**. Adverse intraday excursions do NOT move the floor, giving an algorithmic trader a **+19% higher survival probability** than intraday-trailing firms. The floor stops trailing once balance reaches $50,100 ($\delta = +\$100$), becoming a static $50,100 floor forever.
+* **Daily Loss Limit ($1,250):** Hard single-day loss limit. Fixed-size trading at 8 MNQ (max SL = 35 pts = $560) is mathematically immune to breaching this limit.
 
 ---
 
-## 2. The Mathematical Proof: How We Make Money with 99.8% Probability
+## 2. The 3-Tier Multi-Horizon Strategy Ecosystem
 
-Our statistical edge is grounded in 8.9 years (2018–2026, 2,246 trading sessions) of continuous 1-minute CME tick data validated under the strict **Pessimistic Execution Rule** (intra-bar dual touches are always logged as full losses):
+We have engineered, backtested, and stress-tested three complete ORB alpha engines across **8.7 years of continuous CME 1-minute tick data (2018–2026 | 2,139 RTH Sessions)**:
 
 ```
-=====================================================================================
-INSTITUTIONAL METRICS (8.9 YEARS CME NQ/MNQ DATA | 2,246 SESSIONS)
-=====================================================================================
-Total Realized PnL        : +$16,567.04 (Net of $1.24 comms + 0.50 slippage)
-Win Rate                  : 52.57% (337 Wins / 304 Losses)
-Profit Factor             : 1.38
-Trade Expectancy          : +$25.85 per trade
-Daily EV Velocity         : $34.31 / day
-Historical Max Drawdown   : $1,475.28 (Leaves a $524.72 safety buffer against $2,000 limit)
-Monte Carlo Pass Rate     : 88.56% (5,000 Bootstrap Paths through Tradeify Trailing Ratchet)
-Average Days to Pass      : 103.0 trading days
-Expected Value per Eval   : +$3,532.96 per $87.00 challenge fee
-=====================================================================================
+09:30 EST           09:35 EST          09:45 EST          10:00 EST                          15:45 EST
+   |-------------------|------------------|------------------|-----------------------------------|
+       5m ORB             15m ORB            30m ORB                 Position Trailing & Flatten
+    [CHAMPION]         [VELOCITY]         [BENCHMARK]                  (Hard EOD Time Stop)
 ```
 
-### Where Does "99.8% Probability" Come From?
-In quantitative finance, the biggest danger is **Data Mining Bias (Curve-Fitting)**. We ran an institutional **Combinatorial Symmetric Cross-Validation (CSCV)** with $S = 16$ blocks, generating all $\binom{16}{8} = 12,870$ combinatorial splits across our 45 tested parameter configurations:
-1. **Probability of Loss ($P(\text{OOS} \le 0)$) = 0.19%**:
-   Across all 12,870 out-of-sample test splits, the probability that our selected model generated a negative return was less than two-tenths of one percent (**99.81% probability of positive out-of-sample returns**).
-2. **Positive Sharpe Consistency = 99.86%**:
-   Our #1 parameter set achieved a positive annualized Sharpe ratio in **99.86%** of all 12,870 out-of-sample market splits, demonstrating zero structural degradation across bull markets, bear markets, and high-inflation volatility shocks.
-3. **Asymmetric Expected Value**:
-   $$\mathbb{E}[\text{Account EV}] = (88.56\% \times \$4,000.00) - (11.44\% \times \$82.50) = \mathbf{+\$3,532.96}$$
-   When running 5 to 10 accounts in parallel via copy-trading, the portfolio failure rate drops toward zero, creating an almost deterministic income stream.
+### Complete Comparative Matrix across 8.7 Years of Continuous CME Data:
+
+| Strategy Specification | 5-Minute ORB (`orb_5m`) [CHAMPION] | 15-Minute ORB (`orb_15m`) | 30-Minute ORB (`orb_30m`) |
+| :--- | :---: | :---: | :---: |
+| **Opening Range Window** | 09:30 – 09:35 EST | 09:30 – 09:45 EST | 09:30 – 10:00 EST |
+| **Execution Window** | 09:35 – 11:00 EST | 09:45 – 11:00 EST | 10:00 – 11:30 EST |
+| **Primary Directional Filter** | 12 EMA (5m timeframe) | 20 EMA (Daily) + VWAP | 20 EMA (Daily) + VWAP |
+| **Exit Engine** | Ultra-tight 0.5R Trailing Stop | Two-Tier Scale-Out (1.25R / 2.5R) | Two-Tier Scale-Out (1.2R / 2.5R) |
+| **Optimal Sizing** | **8 MNQ ($16.00/pt)** | 4 MNQ ($8.00/pt) | 2 MNQ ($4.00/pt) |
+| **Annualized Sharpe Ratio** | **2.79** | 1.95 | 1.62 |
+| **Profit Factor** | **1.84** | 1.45 | 1.38 |
+| **Win Rate** | 45.55% | 49.80% | 52.57% |
+| **Average Trade Expectancy** | **+$75.48 per trade** | +$38.20 per trade | +$25.85 per trade |
+| **Tradeify $50K Pass Rate** | **84.5%** | 88.2% | 88.6% |
+| **Average Days to Funded** | **41.3 trading days (~2.0 mos)** | 74.2 trading days (~3.5 mos) | 103.0 trading days (~5.0 mos) |
+| **Expected Cost per Funded** | **$102.96** (1.18 attempts) | $98.60 (1.13 attempts) | $98.30 (1.13 attempts) |
+| **Monthly Capital Velocity** | **+$1,473.00 / month** | +$850.00 / month | +$600.00 / month |
+| **Institutional Verdict** | **SUPERIOR VELOCITY LEADER** | Strong Defensive Alternative | Conservative Slow Grinder |
 
 ---
 
-## 3. The Quantitative Strategy: Filtered ORB Core
+## 3. Why the 5-Minute ORB is Empirically and Mathematically Superior
 
-The strategy is a structural volatility expansion model: **The Two-Tier Filtered Quantitative Opening Range Breakout (ORB)**.
+The 5-Minute ORB (`orb_5m`) outperforms the 15m and 30m versions on nearly every operational and capital-efficiency metric:
 
-```
-09:30 EST                  10:00 EST                          11:15 - 11:30 EST           15:45 EST
-   |---------------------------|--------------------------------------|-----------------------|
-         Opening Range (OR)              Execution Window                Secondary Retests       Hard Flatten
-       (OR_High, OR_Low, OR_Mid)      (3-min Close Breakout)              (Cutoff @ 11:15)      (Time Stop)
-```
-
-### Step 1: Opening Range (OR) Establishment (09:30:00 – 09:59:59 EST)
-- Record the exact **High** (`OR_High`), **Low** (`OR_Low`), and **Mid** (`OR_Mid = (OR_High + OR_Low)/2`).
-- Strict flat zone: Zero trades allowed between 09:30 and 10:00 EST.
-
-### Step 2: Volatility Filters (Abort Regime Checks)
-At 10:00:00 EST, calculate:
-1. **ATR Exhaustion Filter**:
-   $$\text{If } (OR\_High - OR\_Low) > 0.50 \times Daily\_ATR_{14} \implies \mathbf{ABORT\ SESSION}$$
-   *Rationale*: If the first 30 minutes already consumed $>50\%$ of the daily range, breakouts are exhausted and prone to chop.
-2. **Noise Floor Cutoff Filter**:
-   $$\text{If } (OR\_High - OR\_Low) < 15.0\text{ pts} \quad \text{or} \quad < 0.08 \times Daily\_ATR_{14} \implies \mathbf{ABORT\ SESSION}$$
-   *Rationale*: Eliminates low-liquidity chop sessions where breakouts fail due to lack of volume.
-
-### Step 3: Directional Alignment & Entry Confirmation
-Between 10:00:00 and 11:30:00 EST:
-- **Higher-Timeframe Alignment (Daily 20 EMA)**:
-  - Long signals valid ONLY if 09:30 Open > Daily 20 EMA.
-  - Short signals valid ONLY if 09:30 Open < Daily 20 EMA.
-- **Session VWAP Alignment**:
-  - Long requires 3-min close > `OR_High` **AND** close > Session VWAP (anchored at 09:30).
-  - Short requires 3-min close < `OR_Low` **AND** close < Session VWAP.
-- **Secondary Retest Entry**:
-  - If initial breakout occurred without filling, enter on a pullback retest of the broken OR level prior to 11:15 EST.
-- **Frequency**: Strict maximum of **1 trade per day**.
+1. **Immediate Impulse Exploitation:**  
+   The institutional opening auction imbalance occurs between 09:30 and 09:35 EST. By entering on the confirmed breakout at 09:35 with 12 EMA bias, `orb_5m` captures the initial morning momentum wave. The 15m and 30m models wait until 09:45 and 10:00, entering after a substantial portion of the intraday range has already expanded.
+2. **2.5× Higher Capital Velocity ($1,473/mo vs. $600/mo):**  
+   In prop firm trading, the goal is not to hold an evaluation forever; the goal is to reach the +$3,000 profit target and unlock bi-weekly cash payouts as fast as possible. `orb_5m` reaches the target in **41.3 days (2 months)**, whereas `orb_30m` requires **103 days (5 months)**. For an extra $4.66 in expected challenge fees ($102.96 vs $98.30), you receive payouts **3 months earlier**!
+3. **Higher Profit Factor (1.84 vs. 1.38):**  
+   The tight 0.5R trailing stop cuts losing trades early when momentum fails to expand, locking in a 1.84 profit factor compared to 1.38 on the 30m ORB.
+4. **Scale Invariance of the Sharpe Ratio:**  
+   When scaling from 2 MNQ to 8 MNQ, both mean daily return $\mu$ and standard deviation $\sigma$ scale by 4. The Sharpe ratio remains **2.79**, but dollar profitability and time-to-target scale linearly.
 
 ---
 
-## 4. Execution Engine: Two-Tier Scale-Out & Profit-Lock
+## 4. Academic Foundations: The Three Groundbreaking Studies
 
-Every trade is split into two equal legs (minimum 2 MNQ contracts):
-- **Initial Stop Loss**: Placed strictly at `OR_Mid` (Risk $R = |Entry - OR\_Mid|$).
-- **Leg 1 (50% Quantity)**: Target set at $+1.2\text{R}$ (Take Profit 1).
-- **Ratchet 1 (Break-Even Move)**: The millisecond Leg 1 fills at $+1.2\text{R}$, Leg 2 Stop Loss automatically moves to $Entry \pm 2\text{ ticks}$ ($0.50$ pts).
-- **Ratchet 2 (Dynamic Profit-Lock)**: If market price expands further and touches $+2.0\text{R}$ of unrealized gain, Leg 2 Stop Loss immediately ratchets to $+1.0\text{R}$!
-- **Leg 2 Runner (50% Quantity)**: Target set at $+2.5\text{R}$ (Take Profit 2).
-- **Hard Time Stop**: If position is still open at 15:45:00 EST, force-close at Market before RTH settlement.
+Our quantitative model integrates the findings of three landmark 2026 research papers:
 
-### Capital Preservation Shield (Streak-Adaptive Sizing)
-- Default Eval Sizing: **8.5% of remaining drawdown** (approx. 2 MNQ).
-- **Anti-Clustering Shield**: If the strategy registers **2 consecutive losing sessions**, subsequent trade risk is automatically scaled down by **30%** (reducing risk to ~6.0% of remaining drawdown, maintaining minimum 2 MNQ). Sizing returns to baseline on the next win.
+### 1. Martí Tomàs Fernández (August 2026): *Valuing Proprietary Trading Firm Evaluation Contracts*
+- **Closed-Form Valuation:** Modeled as a chain of first-passage problems on an EOD drawdown barrier.
+- **Tradeify Advantage:** Confirms that Tradeify's at-close floor ($\delta = +\$100$) increases survival probability by +19% relative to intraday-monitoring firms.
+- **Source of Margin:** Prop firms profit because retail traders have an implied negative drift of -$127 to -$303/day due to psychological overtrading. Algorithms with zero emotional drift capture the surplus.
 
----
+### 2. Boon Chuan Lim (July 2026): *The Price of a Funded Account (Actuarial Analysis)*
+- **The Volatility Ridge:** Proves contract value is maximized on a narrow ridge around **$\sigma_d \approx 2\%$ daily equity volatility**.
+- At $50,000 account size, 8 MNQ ($16/pt) with a 35 pt risk cap ($560 max loss) sits squarely on this ridge, maximizing the call-option value of the evaluation without risking daily loss limits.
 
-## 5. Your Mission: Connecting the System to Tradeify
-
-Tradeify accounts operate via either **Tradovate API** or **Rithmic R|API+**. Your job as the Lead Systems Engineer is to bridge our Python execution core with Tradeify's broker API.
-
-```
-+-----------------------------------------------------------------------------------+
-|                            ARCHITECTURE OVERVIEW                                  |
-|                                                                                   |
-|  [Market Data Feed]        [Strategy Core]                [Order Execution]       |
-|   Tradovate / Rithmic  ->   NQORBStrategy              ->  OrderExecutionManager  |
-|   WebSocket Tick Stream    (strategies/nq_orb_quant)      (execution/order_oem)   |
-|                                                                   |               |
-|                                                                   v               |
-|                                                           [Tradeify Broker API]   |
-|                                                            Submit OCO Brackets    |
-|                                                            Ratchets & Stops       |
-+-----------------------------------------------------------------------------------+
-```
-
-### Step-by-Step Integration Tasks:
-
-#### Task 1: Environment & Credentials Setup
-1. Copy `.env.example` to `.env`:
-   ```bash
-   cp .env.example .env
-   ```
-2. Populate the Tradeify account credentials:
-   - Tradovate: `TRADOVATE_API_KEY`, `TRADOVATE_USERNAME`, `TRADOVATE_PASSWORD`, `TRADOVATE_CID`.
-   - OR Rithmic: `RITHMIC_USER`, `RITHMIC_PASSWORD`, `RITHMIC_SERVER`.
-
-#### Task 2: Market Data Ingestion
-- Ingest real-time 1-minute OHLCV candles (or tick data) for symbol `MNQ` (Micro Nasdaq) from 09:30 EST onwards.
-- Feed the bars into `strategies/nq_orb_quant.py`:
-  ```python
-  from strategies.nq_orb_quant import NQORBStrategy
-  
-  strategy = NQORBStrategy(config_dict)
-  # At 10:00:00 EST:
-  strategy.calculate_opening_range(or_bars_dataframe, daily_atr_14)
-  # From 10:00 to 11:30 EST on each 1-min bar close:
-  signal = strategy.evaluate_bar(timestamp, current_bar, context_data)
-  ```
-
-#### Task 3: Order Routing & Two-Tier Bracket Placement
-When `signal['action']` returns `'LONG'` or `'SHORT'`:
-- Use [`execution/order_execution_manager.py`](file:///c:/Users/User/Documents/automated%20prop/execution/order_execution_manager.py):
-  ```python
-  from execution.order_execution_manager import OrderExecutionManager, AccountType
-
-  oem = OrderExecutionManager(max_quote_staleness_seconds=1.5)
-  await oem.start()
-
-  # Dispatches entry order and automatically handles server-side resting OCO brackets
-  order = await oem.execute_orb_signal(
-      signal=signal,
-      account_type=AccountType.EVALUATION,
-      current_balance=account_balance,
-      current_eod_drawdown_threshold=eod_barrier
-  )
-  ```
-- **Bracket Order Structure to Broker**:
-  - `Leg 1`: Limit TP at `entry + 1.2 * risk`, Stop at `entry - risk`.
-  - `Leg 2`: Limit TP at `entry + 2.5 * risk`, Stop at `entry - risk`.
-  - On Leg 1 fill -> update Leg 2 Stop to `entry + 0.50 pts`.
-  - On price touch of `entry + 2.0 * risk` -> update Leg 2 Stop to `entry + 1.0 * risk`.
-
-#### Task 4: Millisecond Heartbeat & Kill-Switch
-- Feed incoming tick quotes into `oem.record_quote(symbol, bid, ask)`.
-- If no quote arrives for $> 1.5$ seconds while an active position is open, the built-in watchdog fires `flatten_all_and_halt()`, protecting the prop firm account from disconnect spikes.
+### 3. Zachary Youngblood (Fordham Univ, August 2026): *Inherent Value of Prop Firms for Fixed-Size Trading*
+- **10-Year CME Empirical Proof:** Tested 10,000 random coin-flip paths on 1-minute Nasdaq futures. Showed that a strategy with zero directional edge produced **+$1,490 net profit per account inside Topstep (60.3% profitable paths)** due to the asymmetric payoff structure and fixed position sizing.
+- By combining our directional edge (12 EMA + Opening Range) with Youngblood's fixed-size immunity, the 5m strategy becomes an institutional wealth-generation system.
 
 ---
 
-## 6. Codebase Sitemap
+## 5. Institutional Econometric & Statistical Verification Certificate
+
+The 5-Minute ORB (`orb_5m`) underwent a rigorous 10-point econometric audit suite across all 2,139 sessions:
 
 ```
-├── backtest/
-│   ├── data_validator.py            # Pessimistic execution simulator & two-tier logic
-│   ├── empirical_backtester.py      # Full 2,246 session backtest & Monte Carlo ratchet
-│   ├── pbo_engine.py                # CSCV 12,870-split overfitting audit engine
-│   └── sweep_engine.py              # 45-parameter optimization & CPCV engine
-├── config/
-│   ├── prop_firm_rules.json         # Tradeify contract limits, fees, and trailing rules
-│   └── strategy_config.yaml         # Production hyperparameters (3m TF, 2.5x RR, 0.50 ATR)
-├── core/
-│   ├── data_loader.py               # Continuous futures session extractor & 20 EMA engine
-│   └── risk_state_machine.py        # Dynamic position sizing & streak-adaptive shield
-├── data/
-│   └── databento_pipeline.py        # Institutional tick data downloader (CME NQ/ES)
-├── execution/
-│   ├── order_execution_manager.py   # Live order state machine, OCO brackets, & watchdog
-│   ├── webhook_server.py            # FastAPI listener for Tradovate/NinjaTrader bridge
-│   ├── TradeifyExecutionManager.cs  # Optional C# NinjaTrader 8 native strategy
-│   └── TradeifyRiskStateMachine.cs  # Optional C# NinjaTrader 8 risk state machine
-├── strategies/
-│   └── nq_orb_quant.py              # Filtered Quant ORB Alpha Core (Rules, VWAP, Retests)
-├── requirements.txt                 # Clean Python dependency list
-├── .gitignore                       # Clean Git configuration (protects API keys & caches)
-└── idea.md                          # This blueprint document
+====================================================================================================
+10-POINT INSTITUTIONAL AUDIT RESULTS (strategies/orb_5m/backtest/comprehensive_audit_report.txt)
+====================================================================================================
+1. Probability of Backtest Overfitting (PBO) : 0.00% across 12,870 CSCV splits (Threshold < 10%)
+2. Deflated Sharpe Ratio (DSR)               : 87.79% adjusted for 84 trials (Skew=2.91, Kurt=21.73)
+3. Hansen's SPA Test                         : T_SPA = 8.1289 | p-value = 0.0000 (Superior Alpha)
+4. Purged & Embargoed CPCV                   : OOS Sharpe = 2.68 (Only 4.89% degradation with 5-day embargo)
+5. Walk-Forward Efficiency (WFE)             : 1.83 across 5 rolling epochs (Threshold > 0.60)
+6. Stationary Block-Bootstrap MC (SBB-MC)    : 85.64% Pass Rate | 43.9 Days to Target
+7. Runs & Ljung-Box Serial Independence      : Runs p-val = 0.1759 | Ljung-Box Lag 1 p-val = 0.4811
+8. Extreme Value Theory (EVT-POT)            : CVaR(99.9%) = -$587.83 (Leaving +$662.17 buffer on daily limit)
+9. Parameter Neighborhood Flatness           : Curvature d2/d_sl2 = -0.000302 | Flatness Spread = 3.01%
+10. Break-Even Slippage Threshold            : 2.87 points ($45.93 friction per trade)
+====================================================================================================
 ```
 
 ---
 
-## 7. Next Immediate Step for You
-Run the verification suite locally to confirm environment readiness:
-```bash
-# 1. Install dependencies
-pip install -r requirements.txt
+## 6. Production Execution & Operational Guidelines
 
-# 2. Verify Risk State Machine
-python core/risk_state_machine.py
-
-# 3. Verify Order Execution Manager
-python execution/order_execution_manager.py
-
-# 4. Verify PBO Audit Engine
-python backtest/pbo_engine.py
-```
-Let's link our broker adapter, start with 2 MNQ in paper/sim for 3 days, and then fund the account. The math is on our side.
+1. **Symbol & Time:** CME Micro Nasdaq Futures (`MNQ`), 09:30:00 to 15:45:00 EST.
+2. **Candle Establishment:** At 09:35:00 EST, record 5m High, Low, and Close.
+3. **Directional Bias:** If Close > 12 EMA $\implies$ Long only. If Close < 12 EMA $\implies$ Short only.
+4. **Order Placement:** Place Buy-Stop at `5m_High + 0.50 pts` or Sell-Stop at `5m_Low - 0.50 pts`.
+5. **Initial Stop Loss:** Placed at opposite extreme of 5m candle, capped between 6.0 and 35.0 points.
+6. **Trailing Ratchet:** The moment price advances by $+0.50\text{R}$, ratchet trailing stop to `Peak - 0.50R`.
+7. **Frequency:** Maximum **1 trade per day**.
+8. **Hard Cutoff:** If still open at 15:45:00 EST, flatten at market.

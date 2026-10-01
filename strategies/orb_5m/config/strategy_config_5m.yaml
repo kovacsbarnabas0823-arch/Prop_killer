@@ -1,0 +1,53 @@
+strategy:
+  name: NQ_Institutional_5m_ORB_Velocity_Locked
+  instrument: MNQ
+  description: "Production Locked 5-Minute Opening Range Strategy with 12 EMA Filter & 0.5R Trailing Stop Architecture"
+
+  opening_range:
+    rth_start: "09:30"
+    or_end: "09:35"
+    formation_bars: 5
+
+  indicators:
+    ema_period: 12
+    timeframe: "5m"
+
+  filters:
+    ema_alignment:
+      enabled: true
+      rule: "CLOSE_VS_EMA" # Long if 09:30 5m Close > 12 EMA, Short if Close < 12 EMA
+    noise_floor:
+      enabled: true
+      min_candle_points: 6.0
+    atr_exhaustion:
+      enabled: true
+      lookback_days: 14
+      max_or_atr_ratio: 0.50
+    news_blackout:
+      enabled: true
+      blackout_window_minutes: 2 # Surgical Tier-1 news protection (CPI, PPI, NFP, FOMC)
+
+  execution:
+    entry_mode: "BREAKOUT_WITH_EMA" # Confirmed breakout of 5m High (Long) / 5m Low (Short)
+    entry_window_start: "09:35"
+    entry_window_end: "11:00"
+    force_close_time: "15:45"
+    max_trades_per_day: 1
+
+  trailing_stop:
+    mode: "TRAIL_0.5R" # Model #1 Champion Configuration
+    trail_distance_r: 0.50
+    runner_unconstrained: true
+
+  risk_management:
+    point_value: 2.0 # $2.00 per pt for MNQ ($20.00 for NQ)
+    commission_per_contract: 1.24 # $2.48 roundturn per contract
+    slippage_points: 0.50 # 0.50 pt ($1.00 MNQ) pessimistic fill
+    min_stop_points: 6.0
+    max_stop_points: 35.0 # Max risk = 35 pts * $2 * 8 MNQ = $560 (immune to $1,250 daily limit)
+    contracts: 8 # Locked in: 8 MNQ ($16.00/pt) for optimal Tradeify capital velocity
+    eval_account_size: 50000
+    profit_target_usd: 3000.0
+    trailing_drawdown_usd: 2000.0
+    challenge_fee_usd: 87.0
+    payment_type: "one_time" # Tradeify Growth has no 30-day expiry or recurring monthly fees

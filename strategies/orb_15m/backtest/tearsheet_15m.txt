@@ -1,0 +1,51 @@
+
+================================================================================================
+INSTITUTIONAL TEAR SHEET: HIGH-VELOCITY 15m ORB (PROP TOURNAMENT OVERHAUL)
+================================================================================================
+Data Window               : 2018-01-02 to 2026-09-16 (8.9 Years CME Continuous 1m)
+Execution Model           : Pessimistic ($1.24 Comms + 0.50 pts Slip), Two-Tier 1.25R / 2.50R
+Risk Architecture         : Dynamic 8.5% Remaining DD Sizing (min $140, max $200) | Structural OR_Mid SL
+Target Prop Account       : Tradeify $50K EOD Trailing DD ($2,000 Barrier | $3,000 Target | $82.50 Fee)
+------------------------------------------------------------------------------------------------
+VELOCITY SCORECARD (CORE METRICS):
+  Trade Expectancy        : $7.22 / trade
+  Profit Factor           : 1.10
+  Monte Carlo Pass Rate   : 42.06% (Fail Rate: 46.20%)
+  Avg Trading Days to Pass: 131.9 active trading days
+  Daily EV Velocity (EV/d): $12.47 / day
+  Expected Value (EV)     : $1,644.28
+  Tournament Utility      : 0.1490
+------------------------------------------------------------------------------------------------
+TRADE METRICS:
+  Total Trades Executed   : 565 (63.5 trades / year)
+  Win Rate                : 46.90% (265 Wins / 300 Losses)
+  Total Net Realized PnL  : $4,080.88
+  Average Win             : $172.63
+  Average Loss            : $-138.88
+  Win / Loss Dollar Ratio : 1.24
+  Cumulative Max Drawdown : $2,844.68
+------------------------------------------------------------------------------------------------
+DYNAMIC CONTRACT SIZING DISTRIBUTION:
+   2 MNQ Contracts         :   410 trades (72.6%)
+   4 MNQ Contracts         :    86 trades (15.2%)
+   6 MNQ Contracts         :    35 trades (6.2%)
+   8 MNQ Contracts         :    23 trades (4.1%)
+  10 MNQ Contracts         :     7 trades (1.2%)
+  12 MNQ Contracts         :     3 trades (0.5%)
+  16 MNQ Contracts         :     1 trades (0.2%)
+------------------------------------------------------------------------------------------------
+TWO-TIER EXECUTION BREAKDOWN:
+  STOP_LOSS                           :   295 trades (52.2%)
+  SCALE_OUT_TP                        :   116 trades (20.5%)
+  SCALE_OUT_BE                        :    79 trades (14.0%)
+  SCALE_OUT_PROFIT_LOCK_1R            :    50 trades (8.8%)
+  TIME_EXIT_1545                      :    25 trades (4.4%)
+------------------------------------------------------------------------------------------------
+MONTE CARLO TOURNAMENT ATTEMPTS (5,000 BOOTSTRAP PATHS):
+  Pass Rate               : 42.06%
+  Fail Rate               : 46.20%
+  Avg Trading Days to Pass: 131.9 active trading days
+  Cost per Successful Pass: $196.15
+  Expected Value (EV)     : $1,644.28
+  Daily EV Velocity       : $12.47 / day
+================================================================================================

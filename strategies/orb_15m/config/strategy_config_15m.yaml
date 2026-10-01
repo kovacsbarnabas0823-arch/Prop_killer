@@ -1,0 +1,62 @@
+strategy:
+  name: NQ_Institutional_15m_ORB_Velocity
+  instrument: MNQ
+  description: "High-Velocity 15m ORB Engine: Dynamic 8.5% DD Sizing + Asymmetric 1.25R/2.5R Two-Tier + Structural OR_Mid Stop"
+
+  opening_range:
+    rth_start: "09:30"
+    or_end: "09:45"
+    formation_bars: 15
+
+  filters:
+    atr_exhaustion:
+      enabled: true
+      lookback_days: 14
+      max_or_atr_ratio: 0.55       # Task 3: Raised from 0.45 to 0.55 (unblocks ~300 trend sessions)
+    noise_floor:
+      enabled: true
+      min_or_points: 8.0           # Task 3: Set to 8.0 points
+    vwap_confirmation:
+      enabled: true
+      anchor_time: "09:30"
+    htf_alignment:
+      enabled: true
+      ema_period: 20
+    news_filter:
+      enabled: true
+      blackout_window_minutes: 2   # Task 3: Narrowed to +/- 2 minutes (09:58-10:02 for 10:00 releases)
+
+  execution:
+    entry_window_start: "09:45"
+    primary_cutoff: "11:00"
+    force_close_time: "15:45"
+    max_trades_per_day: 1
+    retest:
+      enabled: false               # Task 2: Secondary Retest eliminated
+    two_tier_scale_out:
+      enabled: true
+      leg1_pct: 0.50
+      tp1_r: 1.25                  # Task 2: Leg 1 Target TP1 = +1.25R
+      leg2_pct: 0.50
+      tp2_r: 2.50                  # Task 2: Leg 2 Runner TP2 = +2.50R
+    break_even:
+      enabled: true
+      trigger_r: 1.25              # Ratchet on TP1 fill
+      offset_ticks: 2              # Entry +/- 2 ticks
+    profit_lock:
+      trigger_r: 2.00              # Task 2: Ratchet SL to +1.0R when Leg 2 reaches +2.0R unrealized
+      lock_to_r: 1.00
+
+  risk_management:
+    point_value: 2.0
+    commission_per_contract: 1.24
+    slippage_points: 0.50
+    min_stop_points: 4.0
+    max_stop_points: 40.0          # Task 1: Catastrophic stop distance cap at 40.0 pts (natural stop is OR_Mid)
+    eval_risk_pct: 0.085           # Task 1: Evaluation Risk = 8.5% of Remaining DD
+    min_eval_risk_usd: 140.0       # Task 1: Min $140 per trade
+    max_eval_risk_usd: 200.0       # Task 1: Max $200 per trade
+    dynamic_sizing: true
+
+  time_management:
+    timezone: America/New_York

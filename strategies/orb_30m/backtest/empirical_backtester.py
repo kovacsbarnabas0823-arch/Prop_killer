@@ -25,10 +25,14 @@ import numpy as np
 import pandas as pd
 import yaml
 
-# Ensure project root is in sys.path
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+# Ensure repo root and module root are in sys.path
+MODULE_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = MODULE_ROOT.parent.parent
+for p in [str(REPO_ROOT), str(MODULE_ROOT)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+PROJECT_ROOT = REPO_ROOT
 
 # Support UTF-8 encoding on Windows console
 if hasattr(sys.stdout, "reconfigure"):
@@ -51,7 +55,8 @@ logger = logging.getLogger("EmpiricalBacktester")
 
 class EmpiricalBacktestEngine:
     def __init__(self, config_path: str = "config/strategy_config.yaml"):
-        self.config_path = PROJECT_ROOT / config_path
+        target_cfg = MODULE_ROOT / config_path
+        self.config_path = target_cfg if target_cfg.exists() else (PROJECT_ROOT / config_path)
         with open(self.config_path, "r") as f:
             self.config = yaml.safe_load(f)
 
@@ -293,7 +298,7 @@ class EmpiricalBacktestEngine:
                         eod_dd_barrier = new_barrier
 
         trades_df = pd.DataFrame(trades)
-        out_csv = PROJECT_ROOT / "backtest" / "historical_trade_log.csv"
+        out_csv = MODULE_ROOT / "backtest" / "historical_trade_log.csv"
         trades_df.to_csv(out_csv, index=False)
         logger.info(f"Historical Trade Log generated: {len(trades_df)} trades saved to {out_csv}")
         logger.info(f"Sessions Aborted by ATR Exhaustion Filter: {self.aborted_sessions} / {len(sessions)}")

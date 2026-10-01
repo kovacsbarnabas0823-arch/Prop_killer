@@ -1,0 +1,39 @@
+========================================================================================
+INSTITUTIONAL QUANTITATIVE TEARSHEET: 5-MINUTE ORB + 12 EMA STRATEGY
+Period: 2018–2026 (8.7 Years | 2,139 Daily Sessions)
+Asset: CME Micro E-mini Nasdaq-100 (MNQ) Futures
+Sizing: 4 MNQ Contracts ($8.00 per point)
+Execution Friction: $9.92 Roundturn Comms + 0.50 pts Slippage
+========================================================================================
+
+1. CORE RETURN & EFFICIENCY METRICS:
+----------------------------------------------------------------------------------------
+Total Realized Net PnL    : +$70,762.00
+Total Trades Executed     : 1,875 trades (87.7% of sessions)
+Win Rate                  : 45.55% (854 Wins / 1021 Losses)
+Profit Factor             : 1.84
+Average Trade Expectancy  : +$37.74 per trade
+Annualized Sharpe Ratio   : 2.79
+Maximum Realized Drawdown : -$1,616.92 (Safety Buffer on $2,000 limit: +$383.08)
+
+2. YEAR-BY-YEAR PERFORMANCE AUDIT:
+----------------------------------------------------------------------------------------
+      trades   net_pnl   win_rate
+year                             
+2018     212   2128.96  43.396226
+2019     208    596.64  35.576923
+2020     212   6352.96  43.396226
+2021     220   9552.60  44.090909
+2022     218  14235.44  54.128440
+2023     223   6224.84  43.946188
+2024     222  12767.76  48.198198
+2025     214  11941.12  49.065421
+2026     146   6961.68  48.630137
+
+3. EXIT REASON ATTRIBUTION:
+----------------------------------------------------------------------------------------
+exit_reason
+STOP_LOSS          945
+TRAILING_STOP      929
+FORCE_CLOSE_EOD      1
+========================================================================================

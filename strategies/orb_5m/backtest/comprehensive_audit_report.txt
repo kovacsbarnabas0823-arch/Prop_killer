@@ -1,0 +1,68 @@
+====================================================================================================
+INSTITUTIONAL QUANTITATIVE AUDIT & ECONOMETRIC VERIFICATION REPORT
+Strategy: NQ 5-Minute Opening Range Breakout with 12 EMA Filter
+Target: CME Micro E-mini Nasdaq-100 (MNQ) Futures | 8 Contracts ($16.00/pt)
+Execution Engine: Tradeify $50K Evaluation Architecture ($2,000 Trailing DD, $3,000 Target)
+====================================================================================================
+
+1. OVERFITTING & STATISTICAL SIGNIFICANCE (CSCV & DSR)
+----------------------------------------------------------------------------------------------------
+• Empirical Probability of Backtest Overfitting (PBO) : 0.00% (Threshold: < 10% PASS)
+• Probability of Out-of-Sample Net Loss P(OOS <= 0)  : 0.00% (Threshold: < 5% PASS)
+• Mean Out-of-Sample Annualized Sharpe Ratio          : 2.69
+• Full-Sample Annualized Sharpe Ratio                 : 2.79
+• Deflated Sharpe Ratio (DSR)                         : 87.79% (Threshold: > 95% PASS)
+• Return Distribution Higher Moments                  : Skewness = 2.906 | Kurtosis = 21.727
+
+2. HANSEN'S SUPERIOR PREDICTIVE ABILITY (SPA) TEST
+----------------------------------------------------------------------------------------------------
+• Studentized SPA Test Statistic (T_SPA)              : 8.1289
+• Hansen Bootstrap p-value                            : 0.0000 (p < 0.01 confirms genuine alpha over benchmark)
+
+3. PURGED & EMBARGOED COMBINATORIAL CROSS-VALIDATION (CPCV)
+----------------------------------------------------------------------------------------------------
+• Purged In-Sample Mean Sharpe (5-Day Embargo)        : 2.82
+• Purged Out-of-Sample Mean Sharpe (5-Day Embargo)    : 2.68
+• Cross-Split Information Degradation                 : 4.89% (Degradation < 5% confirms structural integrity)
+
+4. WALK-FORWARD EFFICIENCY (WFE)
+----------------------------------------------------------------------------------------------------
+• Mean Walk-Forward Efficiency (CAGR_OOS / CAGR_IS)   : 1.83 (Threshold: > 0.60 PASS)
+• Multi-Epoch Consistency Breakdown:
+    Epoch 1: In-Sample PnL = $6,125.76 | Out-of-Sample PnL = $19,903.04 | WFE = 3.25
+    Epoch 2: In-Sample PnL = $19,903.04 | Out-of-Sample PnL = $38,006.80 | WFE = 1.91
+    Epoch 3: In-Sample PnL = $38,006.80 | Out-of-Sample PnL = $33,887.44 | WFE = 0.89
+    Epoch 4: In-Sample PnL = $33,887.44 | Out-of-Sample PnL = $43,600.96 | WFE = 1.27
+
+5. STATIONARY BLOCK-BOOTSTRAP MONTE CARLO (SBB-MC | POLITIS & ROMANO 1994)
+----------------------------------------------------------------------------------------------------
+• Challenge Pass Rate (5,000 Bootstrap Paths)         : 85.64%
+• Challenge Ruin / Bust Rate                          : 14.36%
+• Expected Trading Days to Pass Target ($3,000)       : 43.9 days (Median: 37.0 days)
+• Expected Calendar Months to Funded                  : 2.1 months
+
+6. SERIAL INDEPENDENCE & LOSS CLUSTERING AUDIT
+----------------------------------------------------------------------------------------------------
+• Wald-Wolfowitz Runs Test Statistic (Z)              : -1.353 (p-value: 0.1759)
+• Return Autocorrelation Test (Ljung-Box Lag 1 p-val) : 0.4811 (Independent if p > 0.05)
+• Volatility Clustering Test (Ljung-Box Lag 5 p-val)  : 0.0845
+
+7. EXTREME VALUE THEORY (EVT-POT TAIL RISK AUDIT)
+----------------------------------------------------------------------------------------------------
+• Generalized Pareto Distribution Shape Parameter (xi): -1.9818 (Sub-exponential / finite moments)
+• Extreme Value at Risk VaR(99.9%)                    : -$587.82
+• Expected Shortfall CVaR(99.9%)                      : -$587.83 (Buffer on $1,250 Daily Limit: +$662.17)
+
+8. PARAMETER STABILITY & NEIGHBORHOOD FLATNESS
+----------------------------------------------------------------------------------------------------
+• Second Derivative Curvature (Hessian d2/d_sl2)      : -0.000302
+• Neighborhood Flatness Spread (25 to 45 pts stop)    : 3.01%
+• Parameter Plateau: 25pt SL: 2.79 | 35pt SL: 2.74 | 45pt SL: 2.66
+
+9. FRICTION DECAY & BREAK-EVEN STRESS TEST
+----------------------------------------------------------------------------------------------------
+• Break-Even Slippage Threshold                       : 2.87 points ($45.93/trade)
+• Net Realized PnL @ 1.00 pt Slippage ($16/trade)     : +$112,712.00
+• Net Realized PnL @ 2.00 pt Slippage ($32/trade)     : +$55,008.00
+• Decay Rate per 0.25 pt (1 tick) Slippage            : -$14,406.00
+====================================================================================================

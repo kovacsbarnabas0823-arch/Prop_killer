@@ -87,39 +87,42 @@ class RiskStateMachine:
         tier = self.evaluate_tier(account_type, current_balance)
         buffer_above_start = current_balance - self.starting_balance
 
-        # Base risk percentages per tier
+        # Enforce catastrophic stop distance cap of 40.0 points
+        effective_stop_points = min(stop_loss_points, 40.0)
+
+        # Base risk calculation per tier
         if tier == RiskTier.TIER_1_EVALUATION:
-            risk_pct = 0.085  # 8.5% High Velocity
-        elif tier == RiskTier.TIER_2_BUFFER_BUILDING:
-            risk_pct = 0.050  # 5.0% Buffer Building
-        elif tier == RiskTier.TIER_3_ANNUITY:
-            risk_pct = 0.025  # 2.5% Annuity Preservation
+            # Aggressive Evaluation Mode: 8.5% of Remaining DD, clamped between $140 and $200
+            raw_risk = remaining_drawdown * 0.085
+            dollar_risk_allocated = max(140.0, min(200.0, raw_risk))
+            # Contract Sizing Formula: max(2, 2 * floor(target_risk / (stop_pts * $2.00 * 2)))
+            risk_per_pair = effective_stop_points * self.mnq_point_value * 2.0
+            pairs = math.floor(dollar_risk_allocated / risk_per_pair)
+            mnq_contracts = max(2, 2 * pairs)
+            risk_per_mnq = effective_stop_points * self.mnq_point_value
         else:
-            raise ValueError(f"Unknown tier: {tier}")
+            if tier == RiskTier.TIER_2_BUFFER_BUILDING:
+                risk_pct = 0.050  # 5.0% Buffer Building
+            elif tier == RiskTier.TIER_3_ANNUITY:
+                risk_pct = 0.025  # 2.5% Annuity Preservation
+            else:
+                raise ValueError(f"Unknown tier: {tier}")
 
-        # Streak-Adaptive Drawdown Shield (Anti-clustering risk modifier)
-        # If strategy registers >= 2 consecutive losing sessions, scale down trade risk by 30%
-        if consecutive_losses >= 2:
-            risk_pct *= 0.70  # e.g., from 8.5% down to 5.95% (~6.0%)
+            if consecutive_losses >= 2:
+                risk_pct *= 0.70
 
-        dollar_risk_allocated = remaining_drawdown * risk_pct
-        risk_per_mnq = stop_loss_points * self.mnq_point_value
+            dollar_risk_allocated = remaining_drawdown * risk_pct
+            risk_per_mnq = effective_stop_points * self.mnq_point_value
+            mnq_contracts = math.floor(dollar_risk_allocated / risk_per_mnq)
+            if mnq_contracts < 2:
+                mnq_contracts = 2
+            elif mnq_contracts % 2 != 0:
+                mnq_contracts -= 1
 
-        # Calculate raw MNQ contracts (rounded down)
-        mnq_contracts = math.floor(dollar_risk_allocated / risk_per_mnq)
-
-        # Enforce minimum 2 micro contracts and even contract count for clean 50/50 two-tier splitting
-        if mnq_contracts < 2:
-            mnq_contracts = 2
-        elif mnq_contracts % 2 != 0:
-            mnq_contracts -= 1
-
-        # Task 4: Round down to whole MNQ, convert to NQ if contracts > 10
+        # Instrument conversion if MNQ contracts exceed threshold
         if mnq_contracts > self.mnq_to_nq_threshold:
-            # Convert to standard NQ contracts (1 NQ = 10 MNQ = $20/pt)
             nq_contracts = math.floor(mnq_contracts / 10)
             if nq_contracts < 2:
-                # Keep as MNQ if converting to NQ drops contract count below 2
                 selected_instrument = "MNQ"
                 final_contracts = mnq_contracts
                 actual_dollar_risk = mnq_contracts * risk_per_mnq
@@ -128,7 +131,7 @@ class RiskStateMachine:
                     nq_contracts -= 1
                 selected_instrument = "NQ"
                 final_contracts = nq_contracts
-                actual_dollar_risk = nq_contracts * (stop_loss_points * self.nq_point_value)
+                actual_dollar_risk = nq_contracts * (effective_stop_points * self.nq_point_value)
         else:
             selected_instrument = "MNQ"
             final_contracts = mnq_contracts
@@ -138,7 +141,7 @@ class RiskStateMachine:
             instrument=selected_instrument,
             contracts=final_contracts,
             dollar_risk=round(actual_dollar_risk, 2),
-            stop_distance_points=stop_loss_points,
+            stop_distance_points=effective_stop_points,
             effective_risk_pct=round((actual_dollar_risk / remaining_drawdown) * 100, 2),
             tier=tier,
             buffer_above_start=round(buffer_above_start, 2),

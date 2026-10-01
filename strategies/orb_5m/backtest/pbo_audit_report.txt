@@ -1,0 +1,35 @@
+========================================================================================
+INSTITUTIONAL QUANTITATIVE AUDIT: PROBABILITY OF BACKTEST OVERFITTING (PBO)
+Methodology: Combinatorial Symmetric Cross-Validation (CSCV | S=16 blocks, 12,870 splits)
+Target Strategy: CME NQ/MNQ 5-Minute Opening Candle with 12 EMA Filter
+========================================================================================
+
+1. OVERFITTING & OUT-OF-SAMPLE AUDIT METRICS:
+----------------------------------------------------------------------------------------
+Empirical Probability of Backtest Overfitting (PBO): 0.00%
+   [Threshold Guide: PBO < 10% = Robust / Institutional | PBO > 50% = High Overfitting]
+Probability of Out-of-Sample Net Loss P(OOS <= 0) : 0.00%
+Proportion of Positive Out-of-Sample Sharpe Splits : 100.00%
+Mean Out-of-Sample Relative Percentile Rank       : 97.27%
+Median Out-of-Sample Relative Percentile Rank     : 97.65%
+Mean Out-of-Sample Annualized Sharpe Ratio        : 2.69
+
+2. DEFLATED SHARPE RATIO (DSR) & SELECTION BIAS CORRECTION:
+----------------------------------------------------------------------------------------
+Full Period Annualized Sharpe Ratio               : 2.79
+Expected Maximum Null Sharpe across Trials (SR*) : 2.47
+Daily Return Skewness                             : 2.906
+Daily Return Kurtosis                             : 21.727
+Deflated Sharpe Ratio (DSR)                       : 87.79%
+   [Interpretation: > 95% confirms statistically significant edge after accounting for 84 trials]
+
+3. WINNING PARAMETER SPECIFICATION:
+----------------------------------------------------------------------------------------
+Model ID                                          : #1
+Entry Mode                                        : BREAKOUT_WITH_EMA
+Trailing Stop Mode                                : TRAIL_0.5R
+Max Stop Loss Cap                                 : 35.0 points
+Win Rate                                          : 45.55%
+Profit Factor                                     : 1.84
+Max Historical Drawdown                           : $808.46
+========================================================================================

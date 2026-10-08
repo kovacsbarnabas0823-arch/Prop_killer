@@ -114,6 +114,12 @@ The 5-Minute ORB (`orb_5m`) underwent a rigorous 10-point econometric audit suit
 3. **Directional Bias:** If Close > 12 EMA $\implies$ Long only. If Close < 12 EMA $\implies$ Short only.
 4. **Order Placement:** Place Buy-Stop at `5m_High + 0.50 pts` or Sell-Stop at `5m_Low - 0.50 pts`.
 5. **Initial Stop Loss:** Placed at opposite extreme of 5m candle, capped between 6.0 and 35.0 points.
-6. **Trailing Ratchet:** The moment price advances by $+0.50\text{R}$, ratchet trailing stop to `Peak - 0.50R`.
+6. **Trailing Ratchet:** The moment price advances favorably, continuously ratchet trailing stop by $0.50\text{R}$ (`Peak - 0.50R` for Longs, `Trough + 0.50R` for Shorts).
 7. **Frequency:** Maximum **1 trade per day**.
-8. **Hard Cutoff:** If still open at 15:45:00 EST, flatten at market.
+8. **Watchdog Heartbeat:** 1.5-second quote staleness kill-switch watchdog immediately flattens open exposure.
+9. **Hard Cutoff:** If still open at 15:45:00 EST, flatten at market.
+10. **Live Implementation Files:**
+    - Python Engine: `strategies/orb_5m/execution/order_execution_manager_5m.py`
+    - NinjaTrader 8 Strategy: `strategies/orb_5m/execution/TradeifyExecutionManager_5m.cs`
+    - CLI Runner: `strategies/orb_5m/execution/live_runner_5m.py`
+

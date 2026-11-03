@@ -176,14 +176,16 @@ def simulate_single_model(
             max_scan = min(85, n_bars)
             for i in range(max_scan):
                 if direction == 1 and highs[i] > c_high:
-                    entry_price = c_high + slippage_pts
+                    # FIX #2b: Gap-aware entry – if bar opens above breakout level, fill at open
+                    entry_price = max(c_high, opens[i]) + slippage_pts
                     risk_pts = min(max(entry_price - c_low, min_sl_pts), max_sl_pts)
                     initial_sl = entry_price - risk_pts
                     start_idx = i
                     entered = True
                     break
                 elif direction == -1 and lows[i] < c_low:
-                    entry_price = c_low - slippage_pts
+                    # FIX #2b: Gap-aware entry – if bar opens below breakout level, fill at open
+                    entry_price = min(c_low, opens[i]) - slippage_pts
                     risk_pts = min(max(c_high - entry_price, min_sl_pts), max_sl_pts)
                     initial_sl = entry_price + risk_pts
                     start_idx = i
@@ -215,24 +217,40 @@ def simulate_single_model(
         exit_price = None
         exit_reason = None
 
-        # Intra-day bar traversal
+        # ──────────────────────────────────────────────────────────────────
+        # Intra-day bar traversal  (FIX #1 + FIX #2a applied)
+        #
+        # FIX #1 – Worst-case intra-bar ordering:
+        #   Long:  assume price hits LOW first (stop check), then HIGH (trail update).
+        #   Short: assume price hits HIGH first (stop check), then LOW (trail update).
+        #   After updating the trail, re-check whether the adverse extreme
+        #   would have hit the *new* (tighter) stop.
+        #
+        # FIX #2a – Gap-aware stop fills:
+        #   If the bar opens beyond the stop level (gap), the fill is at the
+        #   open price (worse than the stop), not the stop itself.
+        # ──────────────────────────────────────────────────────────────────
         for i in range(start_idx, n_bars):
+            b_open = opens[i]
             b_high = highs[i]
             b_low = lows[i]
 
-            # 1. Pessimistic Stop check
+            # ── PHASE 1: Stop check at CURRENT stop level ────────────────
             if direction == 1:
                 if b_low <= current_sl:
-                    exit_price = current_sl - slippage_pts
+                    # FIX #2a: gap-aware fill
+                    fill = min(current_sl, b_open)
+                    exit_price = fill - slippage_pts
                     exit_reason = "TRAILING_STOP" if current_sl > entry_price else "STOP_LOSS"
                     break
             else:
                 if b_high >= current_sl:
-                    exit_price = current_sl + slippage_pts
+                    fill = max(current_sl, b_open)
+                    exit_price = fill + slippage_pts
                     exit_reason = "TRAILING_STOP" if current_sl < entry_price else "STOP_LOSS"
                     break
 
-            # 2. Fixed target check
+            # ── PHASE 2: Fixed target check ──────────────────────────────
             if target_price is not None:
                 if direction == 1 and b_high >= target_price:
                     exit_price = target_price - slippage_pts
@@ -243,11 +261,10 @@ def simulate_single_model(
                     exit_reason = "TARGET_PROFIT"
                     break
 
-            # 3. Two-Tier TP1 check
+            # ── PHASE 3: Two-Tier TP1 check ──────────────────────────────
             if is_two_tier and not tp1_hit:
                 if direction == 1 and b_high >= tp1_price:
                     tp1_hit = True
-                    # Ratchet stop to breakeven + 2 ticks
                     be_level = entry_price + 0.50
                     if be_level > current_sl:
                         current_sl = be_level
@@ -257,7 +274,10 @@ def simulate_single_model(
                     if be_level < current_sl:
                         current_sl = be_level
 
-            # 4. Trailing stop updates
+            # ── PHASE 4: Trailing stop update (peak moves in favorable direction)
+            # Save pre-ratchet stop for FIX #1 comparison
+            pre_ratchet_sl = current_sl
+
             if direction == 1:
                 if b_high > peak:
                     peak = b_high
@@ -292,7 +312,16 @@ def simulate_single_model(
                     cand = peak - (1.0 * risk_pts)
                     if cand > current_sl: current_sl = cand
 
-            else: # Short
+                # FIX #1: After trail ratchet, re-check if the bar LOW
+                # would have hit the NEW (tighter) stop within the same bar.
+                # Only re-check if the stop was actually ratcheted this bar.
+                if current_sl > pre_ratchet_sl and b_low <= current_sl:
+                    fill = min(current_sl, b_open)
+                    exit_price = fill - slippage_pts
+                    exit_reason = "TRAILING_STOP"
+                    break
+
+            else:  # Short
                 if b_low < peak:
                     peak = b_low
 
@@ -325,6 +354,15 @@ def simulate_single_model(
                 elif is_two_tier and tp1_hit:
                     cand = peak + (1.0 * risk_pts)
                     if cand < current_sl: current_sl = cand
+
+                # FIX #1: After trail ratchet, re-check if the bar HIGH
+                # would have hit the NEW (tighter) stop within the same bar.
+                # Only re-check if the stop was actually ratcheted this bar.
+                if current_sl < pre_ratchet_sl and b_high >= current_sl:
+                    fill = max(current_sl, b_open)
+                    exit_price = fill + slippage_pts
+                    exit_reason = "TRAILING_STOP"
+                    break
 
         # EOD settlement if still holding
         if exit_price is None:

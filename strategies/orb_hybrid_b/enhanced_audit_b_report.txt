@@ -1,0 +1,15 @@
+
+ENHANCED OPTION B AUDIT REPORT
+=====================================
+Total Net PnL: $-1,074.10
+Win Rate: 47.35%
+Profit Factor: 0.98
+Expectancy: $-1.67/trade
+Max Drawdown: -$5,650.64
+In-Sample PnL: $-2,893.16 (PF 0.88)
+Out-of-Sample PnL: $1,819.05 (PF 1.08)
+Tradeify Challenge Pass Rate: 11.8%
+Avg Days to Pass: 167.1
+Expected Attempts: 8.47 ($737.29)
+Funded Payout Success: 1.3%
+Total Days to Cash: 340.0

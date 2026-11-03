@@ -42,8 +42,8 @@ if hasattr(sys.stderr, "reconfigure"):
 
 from core.data_loader import load_continuous_nq_parquet, extract_daily_trading_sessions
 from core.risk_state_machine import AccountType, RiskStateMachine
-from strategies.nq_orb_quant import NQORBStrategy
-from backtest.data_validator import BacktestTrade, TradeOutcome, evaluate_bar_with_pessimistic_rule
+from strategies.orb_30m.strategies.nq_orb_quant import NQORBStrategy
+from strategies.orb_30m.backtest.data_validator import BacktestTrade, TradeOutcome, evaluate_bar_with_pessimistic_rule
 
 logging.basicConfig(
     level=logging.INFO,
@@ -455,7 +455,7 @@ def generate_tear_sheet(trades_df: pd.DataFrame, mc_results: dict, date_window: 
     tear_sheet_text = "\n".join([line for line in tear_sheet_lines if line != ""])
     print(tear_sheet_text)
 
-    tearsheet_file = PROJECT_ROOT / "backtest" / "empirical_tearsheet.txt"
+    tearsheet_file = MODULE_ROOT / "backtest" / "empirical_tearsheet.txt"
     with open(tearsheet_file, "w", encoding="utf-8") as f:
         f.write(tear_sheet_text)
     logger.info(f"Tear sheet written to {tearsheet_file}")

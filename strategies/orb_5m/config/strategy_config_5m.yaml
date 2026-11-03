@@ -44,8 +44,8 @@ strategy:
     commission_per_contract: 1.24 # $2.48 roundturn per contract
     slippage_points: 0.50 # 0.50 pt ($1.00 MNQ) pessimistic fill
     min_stop_points: 6.0
-    max_stop_points: 35.0 # Max risk = 35 pts * $2 * 8 MNQ = $560 (immune to $1,250 daily limit)
-    contracts: 8 # Locked in: 8 MNQ ($16.00/pt) for optimal Tradeify capital velocity
+    max_stop_points: 35.0 # Max risk = 35 pts * $2 * 4 MNQ = $280 (immune to $1,250 daily limit)
+    contracts: 4 # 4 MNQ ($8.00/pt) – historical max DD $1,617 leaves $383 buffer on $2,000 limit
     eval_account_size: 50000
     profit_target_usd: 3000.0
     trailing_drawdown_usd: 2000.0

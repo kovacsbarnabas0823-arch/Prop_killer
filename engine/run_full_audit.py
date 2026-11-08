@@ -37,7 +37,7 @@ from engine.monte_carlo import TradeifyChallengeSimulator, SimulationResults
 from strategies.base_strategy import CompletedTrade, TradeSignal
 from strategies.h1_orb_30m_regime import H1ORB30mRegime
 from strategies.h2_ny_london_sweep import H2NYLondonSweep
-from strategies.h3_lob_4th_touch import H3LOB4thTouch
+from strategies.h3_noise_band_momentum import H3NoiseBandMomentum
 from strategies.h4_letf_1500_rebalance import H4LETF1500Rebalance
 from strategies.portfolio_orchestrator import PortfolioOrchestrator
 

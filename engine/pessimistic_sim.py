@@ -1,13 +1,15 @@
 """
-Pessimistic Intra-Bar Execution Simulator (Vectorized / NumPy Optimized)
+Pessimistic Intra-Bar Execution Simulator (Phase 2 Upgraded)
 Author: Principal Quantitative Architect & Execution Engineer
 
-Enforces:
-  - Intra-bar Stop-First Execution Priority (if both SL and TP touch in the same 1m bar, SL is hit first).
+Features:
+  - Intra-bar Stop-First Execution Priority (if both SL and TP touch in the same bar, SL is hit first).
   - Explicit Friction: $2.48 round-trip commission per MNQ contract ($1.24 entry, $1.24 exit).
   - Explicit Slippage: 0.50 NQ index points per fill against the trade.
-  - Multi-Stage 50% Partial Scale-Out (TP1 with Breakeven stop adjustment).
-  - Dynamic indicators: EMA trailing closes, scratch rules, and hard time cutoffs.
+  - Full-Position Asymmetric Execution Mode (scale_out_tp1 = False): 100% contracts held to asymmetric target/trail.
+  - Legacy 50% Scale-Out Mode (scale_out_tp1 = True).
+  - Delayed Breakeven Activation (be_trigger_r): Stop moves to BE+2.0 only after reaching e.g. +1.4R or +1.5R.
+  - Dynamic RTH VWAP / EMA Trailing Exits on confirmed bar closes.
   - Hard 15:44:00 EST session liquidation.
 """
 
@@ -56,23 +58,24 @@ class PessimisticExecutionSimulator:
         if direction == 1:
             entry_price = open_0 + self.slippage_points
             initial_sl = signal.stop_loss_price
-            tp1_price = signal.tp1_price
-            tp2_price = signal.tp2_price
+            tp_target = signal.tp1_price
             be_price = entry_price + 2.0
+            be_trigger_price = entry_price + (signal.be_trigger_r * signal.sl_dist) if signal.be_trigger_r > 0 else be_price
         else:
             entry_price = open_0 - self.slippage_points
             initial_sl = signal.stop_loss_price
-            tp1_price = signal.tp1_price
-            tp2_price = signal.tp2_price
+            tp_target = signal.tp1_price
             be_price = entry_price - 2.0
+            be_trigger_price = entry_price - (signal.be_trigger_r * signal.sl_dist) if signal.be_trigger_r > 0 else be_price
 
         current_sl = initial_sl
+        is_be_activated = False
         tp1_hit = False
         completed_trades: List[CompletedTrade] = []
 
-        # Contract allocation (50% TP1, 50% runner)
-        if contract_qty >= 2:
-            qty_tp1 = contract_qty // 2
+        scale_out_mode = signal.scale_out_tp1
+        if scale_out_mode:
+            qty_tp1 = contract_qty // 2 if contract_qty >= 2 else contract_qty
             qty_runner = contract_qty - qty_tp1
         else:
             qty_tp1 = contract_qty
@@ -85,13 +88,20 @@ class PessimisticExecutionSimulator:
         times = exec_bars.index
         n_bars = len(highs)
 
-        # Precompute times in minutes or time strings
+        # Precompute trailing indicator values if present
         trail_vals = None
-        if signal.trail_rule and df_indicators is not None and signal.trail_rule in df_indicators.columns:
-            trail_series = df_indicators.reindex(times)[signal.trail_rule]
-            trail_vals = trail_series.to_numpy(dtype=float)
+        trail_upper_vals = None
+        trail_lower_vals = None
 
-        hard_exit_cutoff = 15 * 60 + 44 # 15:44 in minutes
+        if signal.trail_rule and df_indicators is not None:
+            if signal.trail_rule == "VWAP_BAND" and "UpperBand" in df_indicators.columns and "VWAP" in df_indicators.columns:
+                trail_upper_vals = df_indicators.reindex(times)["UpperBand"].to_numpy(dtype=float)
+                trail_lower_vals = df_indicators.reindex(times)["LowerBand"].to_numpy(dtype=float)
+                trail_vals = df_indicators.reindex(times)["VWAP"].to_numpy(dtype=float)
+            elif signal.trail_rule in df_indicators.columns:
+                trail_vals = df_indicators.reindex(times)[signal.trail_rule].to_numpy(dtype=float)
+
+        hard_exit_cutoff = 15 * 60 + 44  # 15:44 in minutes
         signal_exit_cutoff = None
         if signal.hard_time_exit:
             parts = signal.hard_time_exit.split(":")
@@ -109,7 +119,7 @@ class PessimisticExecutionSimulator:
             t_min = bar_time.hour * 60 + bar_time.minute
 
             # 1. Scratch Rule
-            if signal.scratch_bars is not None and bars_held >= signal.scratch_bars and not tp1_hit:
+            if signal.scratch_bars is not None and bars_held >= signal.scratch_bars and not is_be_activated and not tp1_hit:
                 req_progress = signal.scratch_threshold_r * signal.sl_dist
                 if direction == 1:
                     unrealized_peak = bar_high - entry_price
@@ -130,10 +140,10 @@ class PessimisticExecutionSimulator:
                         )
                         return [c_trade]
 
-            # 2. Hard Time Exit
+            # 2. Hard Time Exit Check
             if signal_exit_cutoff is not None and t_min >= signal_exit_cutoff:
                 exit_price = bar_close - (self.slippage_points if direction == 1 else -self.slippage_points)
-                rem_qty = qty_runner if tp1_hit else contract_qty
+                rem_qty = qty_runner if (scale_out_mode and tp1_hit) else contract_qty
                 if rem_qty > 0:
                     completed_trades.append(self._create_trade(
                         signal, direction, rem_qty, entry_time, entry_price,
@@ -144,7 +154,7 @@ class PessimisticExecutionSimulator:
             # Hard 15:44:00 session flatten
             if t_min >= hard_exit_cutoff:
                 exit_price = bar_close - (self.slippage_points if direction == 1 else -self.slippage_points)
-                rem_qty = qty_runner if tp1_hit else contract_qty
+                rem_qty = qty_runner if (scale_out_mode and tp1_hit) else contract_qty
                 if rem_qty > 0:
                     completed_trades.append(self._create_trade(
                         signal, direction, rem_qty, entry_time, entry_price,
@@ -152,106 +162,165 @@ class PessimisticExecutionSimulator:
                     ))
                 return completed_trades
 
-            # 3. Dynamic Trailing Indicator
-            if tp1_hit and qty_runner > 0 and trail_vals is not None:
-                ind_val = trail_vals[i]
-                if not np.isnan(ind_val):
-                    if direction == 1 and bar_close < ind_val:
-                        exit_price = bar_close - self.slippage_points
-                        completed_trades.append(self._create_trade(
-                            signal, direction, qty_runner, entry_time, entry_price,
-                            bar_time, exit_price, "TRAIL_EXIT"
-                        ))
-                        return completed_trades
-                    elif direction == -1 and bar_close > ind_val:
-                        exit_price = bar_close + self.slippage_points
-                        completed_trades.append(self._create_trade(
-                            signal, direction, qty_runner, entry_time, entry_price,
-                            bar_time, exit_price, "TRAIL_EXIT"
-                        ))
-                        return completed_trades
+            # 3. Delayed Breakeven Check
+            if not is_be_activated:
+                if direction == 1 and bar_high >= be_trigger_price:
+                    is_be_activated = True
+                    current_sl = be_price
+                elif direction == -1 and bar_low <= be_trigger_price:
+                    is_be_activated = True
+                    current_sl = be_price
 
-            # 4. Intra-Bar Price Evaluation (Stop-First Priority)
+            # 4. Dynamic Trailing Indicator Exit Check (Evaluated on confirmed candle close)
+            # Engage trailing once activation threshold is reached (e.g. is_be_activated or immediate)
+            trail_active = is_be_activated or (signal.trail_activation_r <= 0.0)
+            if trail_active and trail_vals is not None:
+                val = trail_vals[i]
+                if not np.isnan(val):
+                    if signal.trail_rule == "VWAP_BAND" and trail_upper_vals is not None and trail_lower_vals is not None:
+                        u_band = trail_upper_vals[i]
+                        l_band = trail_lower_vals[i]
+                        if direction == 1:
+                            threshold = min(u_band, val) if not np.isnan(u_band) else val
+                            if bar_close < threshold:
+                                exit_price = bar_close - self.slippage_points
+                                rem_qty = qty_runner if (scale_out_mode and tp1_hit) else contract_qty
+                                completed_trades.append(self._create_trade(
+                                    signal, direction, rem_qty, entry_time, entry_price,
+                                    bar_time, exit_price, "TRAIL_EXIT"
+                                ))
+                                return completed_trades
+                        else:
+                            threshold = max(l_band, val) if not np.isnan(l_band) else val
+                            if bar_close > threshold:
+                                exit_price = bar_close + self.slippage_points
+                                rem_qty = qty_runner if (scale_out_mode and tp1_hit) else contract_qty
+                                completed_trades.append(self._create_trade(
+                                    signal, direction, rem_qty, entry_time, entry_price,
+                                    bar_time, exit_price, "TRAIL_EXIT"
+                                ))
+                                return completed_trades
+                    else:
+                        # Standard VWAP or EMA close cross
+                        if direction == 1 and bar_close < val:
+                            exit_price = bar_close - self.slippage_points
+                            rem_qty = qty_runner if (scale_out_mode and tp1_hit) else contract_qty
+                            completed_trades.append(self._create_trade(
+                                signal, direction, rem_qty, entry_time, entry_price,
+                                bar_time, exit_price, "TRAIL_EXIT"
+                            ))
+                            return completed_trades
+                        elif direction == -1 and bar_close > val:
+                            exit_price = bar_close + self.slippage_points
+                            rem_qty = qty_runner if (scale_out_mode and tp1_hit) else contract_qty
+                            completed_trades.append(self._create_trade(
+                                signal, direction, rem_qty, entry_time, entry_price,
+                                bar_time, exit_price, "TRAIL_EXIT"
+                            ))
+                            return completed_trades
+
+            # 5. Intra-Bar Price Evaluation (Stop-First Pessimistic Priority)
             if direction == 1:
                 sl_touched = (bar_low <= current_sl)
-                tp1_touched = (bar_high >= tp1_price) if not tp1_hit else False
-                tp2_touched = (bar_high >= tp2_price) if (tp1_hit and tp2_price is not None) else False
+                tp_touched = (tp_target is not None and bar_high >= tp_target)
 
+                # PESSIMISTIC PRIORITY: Stop Loss is executed first
                 if sl_touched:
                     exit_price = current_sl - self.slippage_points
-                    rem_qty = qty_runner if tp1_hit else contract_qty
-                    reason = "BE" if tp1_hit else "SL"
+                    rem_qty = qty_runner if (scale_out_mode and tp1_hit) else contract_qty
+                    reason = "BE" if is_be_activated else "SL"
                     completed_trades.append(self._create_trade(
                         signal, direction, rem_qty, entry_time, entry_price,
                         bar_time, exit_price, reason
                     ))
                     return completed_trades
 
-                if not tp1_hit and tp1_touched:
+                # Full-Position Mode Target Hit
+                if not scale_out_mode and tp_touched:
+                    completed_trades.append(self._create_trade(
+                        signal, direction, contract_qty, entry_time, entry_price,
+                        bar_time, tp_target, "TP_FULL"
+                    ))
+                    return completed_trades
+
+                # Scale-Out Mode TP1 Hit
+                elif scale_out_mode and not tp1_hit and tp_touched:
                     tp1_hit = True
+                    is_be_activated = True
+                    current_sl = be_price
                     completed_trades.append(self._create_trade(
                         signal, direction, qty_tp1, entry_time, entry_price,
-                        bar_time, tp1_price, "TP1"
+                        bar_time, tp_target, "TP1"
                     ))
-                    current_sl = be_price
                     if qty_runner == 0:
                         return completed_trades
-                    if tp2_price is not None and bar_high >= tp2_price:
+                    if signal.tp2_price is not None and bar_high >= signal.tp2_price:
                         completed_trades.append(self._create_trade(
                             signal, direction, qty_runner, entry_time, entry_price,
-                            bar_time, tp2_price, "TP2"
+                            bar_time, signal.tp2_price, "TP2"
                         ))
                         return completed_trades
 
-                elif tp1_hit and tp2_touched:
+                elif scale_out_mode and tp1_hit and signal.tp2_price is not None and bar_high >= signal.tp2_price:
                     completed_trades.append(self._create_trade(
                         signal, direction, qty_runner, entry_time, entry_price,
-                        bar_time, tp2_price, "TP2"
+                        bar_time, signal.tp2_price, "TP2"
                     ))
                     return completed_trades
 
             else:
+                # Short Position Evaluation
                 sl_touched = (bar_high >= current_sl)
-                tp1_touched = (bar_low <= tp1_price) if not tp1_hit else False
-                tp2_touched = (bar_low <= tp2_price) if (tp1_hit and tp2_price is not None) else False
+                tp_touched = (tp_target is not None and bar_low <= tp_target)
 
+                # Stop-First Pessimistic Priority
                 if sl_touched:
                     exit_price = current_sl + self.slippage_points
-                    rem_qty = qty_runner if tp1_hit else contract_qty
-                    reason = "BE" if tp1_hit else "SL"
+                    rem_qty = qty_runner if (scale_out_mode and tp1_hit) else contract_qty
+                    reason = "BE" if is_be_activated else "SL"
                     completed_trades.append(self._create_trade(
                         signal, direction, rem_qty, entry_time, entry_price,
                         bar_time, exit_price, reason
                     ))
                     return completed_trades
 
-                if not tp1_hit and tp1_touched:
+                # Full-Position Mode Target Hit
+                if not scale_out_mode and tp_touched:
+                    completed_trades.append(self._create_trade(
+                        signal, direction, contract_qty, entry_time, entry_price,
+                        bar_time, tp_target, "TP_FULL"
+                    ))
+                    return completed_trades
+
+                # Scale-Out Mode TP1 Hit
+                elif scale_out_mode and not tp1_hit and tp_touched:
                     tp1_hit = True
+                    is_be_activated = True
+                    current_sl = be_price
                     completed_trades.append(self._create_trade(
                         signal, direction, qty_tp1, entry_time, entry_price,
-                        bar_time, tp1_price, "TP1"
+                        bar_time, tp_target, "TP1"
                     ))
-                    current_sl = be_price
                     if qty_runner == 0:
                         return completed_trades
-                    if tp2_price is not None and bar_low <= tp2_price:
+                    if signal.tp2_price is not None and bar_low <= signal.tp2_price:
                         completed_trades.append(self._create_trade(
                             signal, direction, qty_runner, entry_time, entry_price,
-                            bar_time, tp2_price, "TP2"
+                            bar_time, signal.tp2_price, "TP2"
                         ))
                         return completed_trades
 
-                elif tp1_hit and tp2_touched:
+                elif scale_out_mode and tp1_hit and signal.tp2_price is not None and bar_low <= signal.tp2_price:
                     completed_trades.append(self._create_trade(
                         signal, direction, qty_runner, entry_time, entry_price,
-                        bar_time, tp2_price, "TP2"
+                        bar_time, signal.tp2_price, "TP2"
                     ))
                     return completed_trades
 
         # End of session close
         final_time = times[-1]
         exit_price = closes[-1] - (self.slippage_points if direction == 1 else -self.slippage_points)
-        rem_qty = qty_runner if tp1_hit else contract_qty
+        rem_qty = qty_runner if (scale_out_mode and tp1_hit) else contract_qty
         if rem_qty > 0:
             completed_trades.append(self._create_trade(
                 signal, direction, rem_qty, entry_time, entry_price,

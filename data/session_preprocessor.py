@@ -43,6 +43,12 @@ class SessionDataPreprocessor:
         self.df: Optional[pd.DataFrame] = None
         self.daily_atr_map: Dict[Any, float] = {}
         self.prev_day_close_map: Dict[Any, float] = {}
+        self.prev_day_high_map: Dict[Any, float] = {}
+        self.prev_day_low_map: Dict[Any, float] = {}
+        self.prev_day_range_map: Dict[Any, float] = {}
+        self.prev2_day_high_map: Dict[Any, float] = {}
+        self.prev2_day_low_map: Dict[Any, float] = {}
+        self.noise_band_map: Dict[Any, Dict[str, Tuple[float, float]]] = {}
         self.daily_dict: Dict[Any, pd.DataFrame] = {}
 
     def load_data(self, force_recompute: bool = False) -> pd.DataFrame:
@@ -145,15 +151,78 @@ class SessionDataPreprocessor:
         # 14-day Wilder / SMA ATR, shifted by 1 day so today's session only uses prior 14 days
         daily_atr = tr.rolling(window=14).mean().shift(1)
 
+        prev_high = daily_bars["High"].shift(1)
+        prev_low = daily_bars["Low"].shift(1)
+        prev_range = (daily_bars["High"] - daily_bars["Low"]).shift(1)
+        prev2_high = daily_bars["High"].shift(2)
+        prev2_low = daily_bars["Low"].shift(2)
+
         self.daily_atr_map = daily_atr.to_dict()
         self.prev_day_close_map = prev_close.to_dict()
+        self.prev_day_high_map = prev_high.to_dict()
+        self.prev_day_low_map = prev_low.to_dict()
+        self.prev_day_range_map = prev_range.to_dict()
+        self.prev2_day_high_map = prev2_high.to_dict()
+        self.prev2_day_low_map = prev2_low.to_dict()
 
         logger.info("Pre-grouping sessions into daily lookup table...")
         self.daily_dict = {d: group for d, group in df.groupby(df.index.date)}
 
+        logger.info("Precomputing Zarattini-Baltussen time-of-day noise envelopes...")
+        checkpoints = ["10:30", "10:45", "11:00", "11:15", "11:30", "11:45", "12:00", "12:30", "13:00", "13:30"]
+        dates_list = sorted(list(self.daily_dict.keys()))
+
+        # For each checkpoint, extract Close across all days
+        rth_1m = df.between_time("09:30", "13:30")
+        opens_0930 = rth_1m.between_time("09:30", "09:30").groupby(rth_1m.between_time("09:30", "09:30").index.date)["Open"].first()
+
+        moves_by_cp = {}
+        for cp in checkpoints:
+            closes_cp = rth_1m.between_time(cp, cp).groupby(rth_1m.between_time(cp, cp).index.date)["Close"].last()
+            df_cp = pd.DataFrame({"Open_0930": opens_0930, "Close_cp": closes_cp}).dropna()
+            df_cp["move"] = (df_cp["Close_cp"] - df_cp["Open_0930"]).abs()
+            # 14-day rolling mean shifted by 1 day
+            sigma_cp = df_cp["move"].rolling(window=14).mean().shift(1)
+            moves_by_cp[cp] = sigma_cp.to_dict()
+
+        # Build noise_band_map
+        for d in dates_list:
+            if d not in self.prev_day_close_map or pd.isna(self.prev_day_close_map[d]):
+                continue
+            p_close = self.prev_day_close_map[d]
+            day_df = self.daily_dict.get(d)
+            if day_df is None or day_df.empty:
+                continue
+            rth_sub = day_df.between_time("09:30", "09:30")
+            if rth_sub.empty:
+                continue
+            d_open = float(rth_sub.iloc[0]["Open"])
+            ref_high = max(d_open, p_close)
+            ref_low = min(d_open, p_close)
+
+            self.noise_band_map[d] = {}
+            for cp in checkpoints:
+                sig = moves_by_cp[cp].get(d)
+                if sig is not None and not pd.isna(sig) and sig > 0:
+                    upper = ref_high + (1.25 * sig)
+                    lower = ref_low - (1.25 * sig)
+                    self.noise_band_map[d][cp] = (upper, lower)
+
     def get_session_bars(self, session_date) -> pd.DataFrame:
         """Returns all 1-minute bars for a specific date in America/New_York timezone via instant O(1) hash lookup."""
         return self.daily_dict.get(session_date, pd.DataFrame())
+
+    def get_noise_band(self, session_date, time_str: str) -> Optional[Tuple[float, float]]:
+        """Returns (UpperBand, LowerBand) for the given date and active time checkpoint."""
+        day_bands = self.noise_band_map.get(session_date)
+        if not day_bands:
+            return None
+        # Find latest checkpoint <= time_str
+        valid_cps = [cp for cp in day_bands.keys() if cp <= time_str]
+        if not valid_cps:
+            return None
+        latest_cp = max(valid_cps)
+        return day_bands[latest_cp]
 
     def get_london_range(self, session_date, df_day_full: pd.DataFrame) -> Tuple[Optional[float], Optional[float], Optional[float]]:
         """

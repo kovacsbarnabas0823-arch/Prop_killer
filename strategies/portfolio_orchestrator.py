@@ -1,18 +1,16 @@
 """
-Multi-Alpha Portfolio Orchestrator (Phase 2 Upgraded)
-Author: Principal Quantitative Architect
+Multi-Alpha Portfolio Orchestrator (Phase 3 Institutional)
+Author: Principal Quantitative Architect & Financial Engineer
 
 Coordinates:
-  - H1: Upgraded 30m Filtered ORB (10:00 - 11:15 NY, Asymmetric 1:2.5R)
-  - H2: NY Open London Sweep Reversal (09:30 - 10:15 NY, 5m Reversal Wick)
-  - H3: Zarattini-Baltussen Noise-Boundary Momentum (10:30 - 13:30 NY)
-  - H4: Two-Wave Leveraged ETF Flow & 0DTE Gamma Pin (14:30 / 15:00 NY)
+  - H3: Multi-Horizon Adaptive Noise-Band Momentum Engine (10:00 - 14:00 NY)
+  - H4: Late-Day Leveraged ETF Flow & 0DTE Gamma Pin (14:30 / 15:00 NY)
 
 Enforces:
   - Strict chronological order flow and single-position concurrency guard.
-  - Dynamic Bellman Position Sizing via TradeifyAccountState.
+  - Decoupled Two-Regime Volatility-Normalized Stochastic Position Sizing.
   - Internal Protective Daily Stop (-$600.00).
-  - Funded Consistency Governor Ceiling (+$825.00).
+  - Skewness-Preserving Funded Consistency Governor (+$920.00 ceiling, $52,650 payout target).
   - H4 Profit Protection (caps risk to 25% of morning profits if up >= +$400).
   - Hard EOD session reconciliation at 15:45:00 EST.
 """
@@ -26,8 +24,6 @@ import pandas as pd
 from engine.tradeify_rules import TradeifyAccountState, AccountPhase
 from engine.pessimistic_sim import PessimisticExecutionSimulator
 from strategies.base_strategy import TradeSignal, CompletedTrade
-from strategies.h1_orb_30m_regime import H1ORB30mRegime
-from strategies.h2_ny_london_sweep import H2NYLondonSweep
 from strategies.h3_noise_band_momentum import H3NoiseBandMomentum
 from strategies.h4_letf_1500_rebalance import H4LETF1500Rebalance
 
@@ -43,18 +39,16 @@ class PortfolioOrchestrator:
     ):
         self.account = account_state or TradeifyAccountState()
         self.sim = simulator or PessimisticExecutionSimulator()
-        self.enabled_modules = enabled_modules or ["H1", "H2", "H3", "H4"]
+        self.enabled_modules = enabled_modules or ["H3", "H4"]
 
         # Instantiate alpha modules
-        self.h1 = H1ORB30mRegime()
-        self.h2 = H2NYLondonSweep()
         self.h3 = H3NoiseBandMomentum()
         self.h4 = H4LETF1500Rebalance()
 
         self.all_completed_trades: List[CompletedTrade] = []
         self.daily_pnl_series: Dict[Any, float] = {}
         self.strategy_pnl_series: Dict[str, List[CompletedTrade]] = {
-            "H1": [], "H2": [], "H3": [], "H4": []
+            "H3": [], "H4": []
         }
 
     def simulate_session(
@@ -72,24 +66,8 @@ class PortfolioOrchestrator:
             self.account.end_session(session_date)
             return []
 
-        # Extract prior day features from preprocessor
-        prev_h = prep.prev_day_high_map.get(session_date) if prep else None
-        prev_l = prep.prev_day_low_map.get(session_date) if prep else None
-        prev_rng = prep.prev_day_range_map.get(session_date) if prep else None
-        prev2_h = prep.prev2_day_high_map.get(session_date) if prep else None
-        prev2_l = prep.prev2_day_low_map.get(session_date) if prep else None
-
         # 1. Collect signals from enabled strategies
         signals: List[TradeSignal] = []
-        if "H2" in self.enabled_modules:
-            signals.extend(self.h2.evaluate_session(session_date, df_session_1m, daily_atr, prev_close))
-
-        if "H1" in self.enabled_modules:
-            signals.extend(self.h1.evaluate_session(
-                session_date, df_session_1m, daily_atr, prev_close,
-                prev_high=prev_h, prev_low=prev_l, prev_range=prev_rng,
-                prev2_high=prev2_h, prev2_low=prev2_l
-            ))
 
         if "H3" in self.enabled_modules:
             signals.extend(self.h3.evaluate_session(
@@ -131,15 +109,21 @@ class PortfolioOrchestrator:
 
         # 2. Sequential execution loop with risk controls
         last_exit_time = pd.Timestamp.min.tz_localize(df_session_1m.index.tz)
+        last_exit_reason: Optional[str] = None
 
         for sig in signals:
             if sig.execution_time < last_exit_time:
                 continue
 
+            # Continuation Re-entry Filter: Requires daily PnL > -$300 and prior exit was not hard SL
+            if sig.metadata.get("is_reentry", False):
+                if self.account.intraday_pnl <= -300.0 or last_exit_reason == "SL":
+                    continue
+
             if self.account.is_breached or self.account.is_daily_stopped or self.account.is_governor_halted:
                 break
 
-            optimal_qty = self.account.get_optimal_mnq_size()
+            optimal_qty = self.account.get_optimal_mnq_size(sl_dist_pts=sig.sl_dist)
             if optimal_qty <= 0:
                 break
 
@@ -165,6 +149,7 @@ class PortfolioOrchestrator:
 
             trade_net_pnl = sum(t.net_pnl for t in trades)
             last_exit_time = max(t.exit_time for t in trades)
+            last_exit_reason = trades[-1].exit_reason
 
             can_continue, halt_reason = self.account.update_intraday_pnl(trade_net_pnl)
             self.account.close_trade(trade_net_pnl)

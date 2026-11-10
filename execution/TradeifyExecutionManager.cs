@@ -44,8 +44,8 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         [NinjaScriptProperty]
         [Range(200.0, 2000.0)]
-        [Display(Name = "Funded Daily Profit Ceiling", Description = "Hard profit cap in Funded mode ($825.00) to protect 35% rule", Order = 4, GroupName = "Tradeify Account Parameters")]
-        public double FundedDailyProfitCeiling { get; set; } = 825.0;
+        [Display(Name = "Funded Daily Profit Ceiling", Description = "Hard profit cap in Funded mode ($920.00) protecting 35% rule on $2,650 target", Order = 4, GroupName = "Tradeify Account Parameters")]
+        public double FundedDailyProfitCeiling { get; set; } = 920.0;
 
         [NinjaScriptProperty]
         [Range(0.5, 5.0)]
@@ -165,28 +165,43 @@ namespace NinjaTrader.NinjaScript.Strategies
         }
 
         /// <summary>
-        /// Calculates optimal MNQ contract count via 4-Tier Bellman Dynamic Sizing.
+        /// Calculates optimal MNQ contract count via Decoupled Two-Regime Volatility-Normalized Stochastic Position Controller.
+        /// Formula: contracts = clip(round(R_target / ((slDistPts * 2.0) + 4.48)), 1, 15)
         /// </summary>
-        public int CalculateOptimalMNQSize(double currentCash)
+        public int CalculateOptimalMNQSize(double currentCash, double slDistPts = 30.0)
         {
             double buffer = currentCash - activeFloor;
-            double netProfit = currentCash - StartingBalance;
+            double profit = currentCash - StartingBalance;
+            double rTarget = 150.0;
 
             if (!IsFundedAccount)
             {
-                // Evaluation Phase
-                if (currentCash >= 52100.0) return 6; // Tier 3 Locked-Floor Sprint
-                if (netProfit >= 1000.0 && buffer >= 1300.0) return 4; // Tier 2 Mid-Buffer Sprint
-                if (buffer >= 900.0) return 3; // Tier 1 Base Accumulation
-                return 2; // Tier 0 Survival Shield
+                // Regime 1: EVALUATION Phase (0% Consistency Rule)
+                if (currentCash >= 51900.0)
+                    rTarget = 440.0; // Tier 3: Lock-Zone Sprint
+                else if (profit >= 700.0 && buffer >= 1300.0)
+                    rTarget = 320.0; // Tier 2: Mid-Buffer Sprint
+                else if (buffer >= 850.0)
+                    rTarget = 225.0; // Tier 1: Base Accumulation
+                else
+                    rTarget = 140.0; // Tier 0: Survival Shield
             }
             else
             {
-                // Funded Phase
-                if (isFloorLocked || eodHighWatermark >= 52100.0) return 4; // Post-Lock Extraction
-                if (buffer < 1000.0) return 2; // Pre-Lock Protection Low
-                return 3; // Pre-Lock Protection High
+                // Regime 2: FUNDED Phase (35% Consistency Rule, $920 Cap, $52,650 Target)
+                if (buffer < 1100.0)
+                    rTarget = 105.0; // Drawdown Shield
+                else if (!isFloorLocked && eodHighWatermark < 52100.0)
+                    rTarget = 150.0; // Pre-Lock Trailing Zone
+                else
+                    rTarget = 215.0; // Post-Lock Static Zone
             }
+
+            double perContractRisk = (slDistPts * 2.00) + 4.48; // $2/pt + $2.48 comm + $2.00 slippage
+            if (perContractRisk <= 0) return 2;
+
+            int contracts = (int)Math.Round(rTarget / perContractRisk);
+            return Math.Max(1, Math.Min(15, contracts));
         }
 
         /// <summary>
@@ -207,8 +222,11 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
 
             double currentCash = Account.Get(AccountItem.CashValue, Currency.UsDollar);
-            int contracts = CalculateOptimalMNQSize(currentCash);
+            double currentPrice = Close[0];
+            double slDistPts = Math.Abs(currentPrice - stopLossPrice);
+            if (slDistPts <= 0) slDistPts = 30.0;
 
+            int contracts = CalculateOptimalMNQSize(currentCash, slDistPts);
             if (contracts <= 0) return;
 
             OrderAction action = isLong ? OrderAction.Buy : OrderAction.SellShort;
@@ -217,8 +235,8 @@ namespace NinjaTrader.NinjaScript.Strategies
             lastEntryTime = DateTime.UtcNow;
             entryOrder = SubmitOrderUnmanaged(0, action, OrderType.Market, contracts, 0, 0, "", signalName);
 
-            Print(string.Format("[OEM EXECUTED] {0} {1} MNQ contracts. Cash: ${2:F2} | Floor: ${3:F2}",
-                action, contracts, currentCash, activeFloor));
+            Print(string.Format("[OEM EXECUTED] {0} {1} MNQ contracts (SL Dist: {2:F2} pts). Cash: ${3:F2} | Floor: ${4:F2}",
+                action, contracts, slDistPts, currentCash, activeFloor));
         }
 
         protected override void OnExecutionUpdate(Execution execution, string executionId, double price, int quantity,

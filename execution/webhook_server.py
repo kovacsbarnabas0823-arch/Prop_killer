@@ -38,7 +38,7 @@ system_state = {
     "current_balance": 50000.0,
     "intraday_pnl": 0.0,
     "daily_stop_limit": -600.0,
-    "funded_profit_cap": 825.0,
+    "funded_profit_cap": 920.0,
     "active_position": None,
     "trades_today": []
 }

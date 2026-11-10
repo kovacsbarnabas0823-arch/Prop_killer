@@ -1,16 +1,19 @@
 """
-Tradeify $50K Growth Monte Carlo & Rolling-Window Challenge Simulator
-Author: Principal Quantitative Architect
+Tradeify $50K Growth Monte Carlo & Horizon Challenge Simulator (Phase 3 Upgraded)
+Author: Principal Quantitative Architect & Financial Engineer
 
 Simulates Tradeify $50K Growth EOD Trailing Drawdown accounts:
   - 10,000 Stationary Block-Bootstrap iterations (preserving volatility clustering).
-  - Rolling historical evaluation windows across 8.9 years.
-  - Two-Phase modeling: EVALUATION ($50K -> $53K) followed immediately by FUNDED ($50K -> $52.5K payout).
-  - Evaluates:
-      * Baseline orb_30m Static (2 MNQ)
-      * orb_30m Simple Sprint (2 -> 4 MNQ)
-      * H1 Regime-Filtered orb_30m + 4-Tier Bellman Sizing
-      * Full Multi-Alpha Portfolio (H1 + H2 + H3 + H4) + Bellman Sizing + Funded Consistency Governor
+  - Multi-Horizon Accounting: 90-day, 180-day, and 250-day (1 trading year) evaluations.
+  - No artificial 30-day calendar timeout (Tradeify has no calendar expiry, only trailing DD breach).
+  - Two-Phase modeling: EVALUATION ($50K -> $53K) followed by FUNDED ($50K -> $52,650 payout).
+  - Decoupled Skewness-Preserving Consistency Governor ($920 daily profit cap, protecting 35% rule).
+  - Reports:
+      * True Pass Rate (%) at 90d, 180d, 250d horizons.
+      * Hard Drawdown Breach Rate (%) vs Timeout Rate (%).
+      * Conditional Funded-to-Payout Conversion Rate (%) = P(Payout | Pass).
+      * Unconditional 1st Payout Rate (%).
+      * Expected Net Value per $87 Attempt (EV = P_payout * $1,500 * 0.90 - $87).
 """
 
 from __future__ import annotations
@@ -28,12 +31,18 @@ logger = logging.getLogger("MonteCarloSim")
 @dataclass
 class SimulationResults:
     model_name: str
-    pass_rate_pct: float
+    pass_rate_pct: float                  # At 250 days
+    pass_rate_90d: float                  # At 90 days
+    pass_rate_180d: float                 # At 180 days
+    breach_rate_pct: float                # Account failed via trailing DD breach
+    timeout_rate_pct: float               # Ended without pass or breach at 250 days
     median_days_to_pass: float
     mean_days_to_pass: float
-    avg_fee_cost_per_pass: float
-    payout_rate_pct: float
+    avg_fee_cost_per_pass: float          # $87 / (pass_rate / 100)
+    conditional_payout_rate_pct: float    # P(Payout | Pass)
+    unconditional_payout_rate_pct: float  # P(Payout) across all attempts
     mean_days_to_payout: float
+    expected_net_value: float             # EV = P_uncond * $1,500 * 0.90 - $87
     total_evaluations: int
 
 
@@ -41,8 +50,8 @@ class TradeifyChallengeSimulator:
     def __init__(
         self,
         config: Optional[TradeifyAccountConfig] = None,
-        max_evaluation_days: int = 120,
-        max_funded_days: int = 120
+        max_evaluation_days: int = 250,
+        max_funded_days: int = 250
     ):
         self.config = config or TradeifyAccountConfig()
         self.max_eval_days = max_evaluation_days
@@ -51,18 +60,17 @@ class TradeifyChallengeSimulator:
     def simulate_path_from_daily_pnls(
         self,
         daily_pnls_eval: np.ndarray,
-        daily_pnls_funded: np.ndarray,
-        base_contracts: int = 2
-    ) -> Tuple[bool, int, bool, int]:
+        daily_pnls_funded: np.ndarray
+    ) -> Dict[str, Any]:
         """
         Simulates a single challenge path:
         Evaluation Phase -> if passed -> Funded Phase -> Payout.
-        Returns (passed_eval, days_to_pass, passed_funded, days_to_payout).
         """
         # --- PHASE 1: EVALUATION ---
         eval_state = TradeifyAccountState(phase=AccountPhase.EVALUATION, config=self.config)
         eval_days = 0
         passed_eval = False
+        breached_eval = False
 
         for pnl in daily_pnls_eval:
             eval_days += 1
@@ -74,22 +82,32 @@ class TradeifyChallengeSimulator:
             if eval_state.is_passed:
                 passed_eval = True
                 break
-            if eval_state.is_breached or eval_days >= self.max_eval_days:
+            if eval_state.is_breached:
+                breached_eval = True
+                break
+            if eval_days >= self.max_eval_days:
                 break
 
         if not passed_eval:
-            return False, eval_days, False, 0
+            return {
+                "passed_eval": False,
+                "eval_days": eval_days,
+                "breached_eval": breached_eval,
+                "got_payout": False,
+                "funded_days": 0
+            }
 
         # --- PHASE 2: FUNDED ---
         funded_state = TradeifyAccountState(phase=AccountPhase.FUNDED, config=self.config)
         funded_days = 0
         got_payout = False
+        breached_funded = False
 
         for pnl in daily_pnls_funded:
             funded_days += 1
             funded_state.start_session()
 
-            # Apply Consistency Governor ceiling on funded days
+            # Apply Consistency Governor ceiling on funded days ($920 cap)
             clamped_pnl = min(pnl, self.config.MAX_FUNDED_DAILY_PROFIT)
 
             funded_state.update_intraday_pnl(clamped_pnl)
@@ -99,26 +117,45 @@ class TradeifyChallengeSimulator:
             if funded_state.is_funded_payout_eligible:
                 got_payout = True
                 break
-            if funded_state.is_breached or funded_days >= self.max_funded_days:
+            if funded_state.is_breached:
+                breached_funded = True
+                break
+            if funded_days >= self.max_funded_days:
                 break
 
-        return True, eval_days, got_payout, funded_days
+        return {
+            "passed_eval": True,
+            "eval_days": eval_days,
+            "breached_eval": False,
+            "got_payout": got_payout,
+            "funded_days": funded_days
+        }
 
     def run_monte_carlo(
         self,
         model_name: str,
         daily_pnl_array: np.ndarray,
         num_simulations: int = 10000,
-        block_size: int = 5
+        block_size: int = 5,
+        daily_pnl_array_funded: Optional[np.ndarray] = None
     ) -> SimulationResults:
         """
-        Executes Stationary Block-Bootstrap Monte Carlo simulations.
+        Executes Stationary Block-Bootstrap Monte Carlo simulations across 10,000 iterations.
+        If daily_pnl_array_funded is provided, uses daily_pnl_array for Evaluation phase
+        and daily_pnl_array_funded for Funded phase, preserving regime-specific position sizing.
         """
         n_days = len(daily_pnl_array)
         if n_days == 0:
             raise ValueError("Daily PnL array is empty.")
+        if daily_pnl_array_funded is not None and len(daily_pnl_array_funded) != n_days:
+            raise ValueError("daily_pnl_array_funded must match length of daily_pnl_array.")
 
         passed_eval_count = 0
+        passed_90d_count = 0
+        passed_180d_count = 0
+        breached_eval_count = 0
+        timeout_eval_count = 0
+
         eval_days_list = []
         payout_count = 0
         payout_days_list = []
@@ -130,43 +167,70 @@ class TradeifyChallengeSimulator:
 
         for _ in range(num_simulations):
             # Block-bootstrap daily PnL stream
-            sampled_pnls = []
+            sampled_eval = []
+            sampled_funded = []
             for _ in range(num_blocks):
                 start_idx = np.random.randint(0, max(1, n_days - block_size))
-                sampled_pnls.extend(daily_pnl_array[start_idx : start_idx + block_size])
+                sampled_eval.extend(daily_pnl_array[start_idx : start_idx + block_size])
+                if daily_pnl_array_funded is not None:
+                    sampled_funded.extend(daily_pnl_array_funded[start_idx : start_idx + block_size])
+                else:
+                    sampled_funded.extend(daily_pnl_array[start_idx : start_idx + block_size])
 
-            sampled_arr = np.array(sampled_pnls)
-            eval_pnls = sampled_arr[:self.max_eval_days]
-            funded_pnls = sampled_arr[self.max_eval_days : self.max_eval_days + self.max_funded_days]
+            eval_pnls = np.array(sampled_eval[:self.max_eval_days])
+            funded_pnls = np.array(sampled_funded[self.max_eval_days : self.max_eval_days + self.max_funded_days])
 
-            passed, e_days, payout, f_days = self.simulate_path_from_daily_pnls(eval_pnls, funded_pnls)
+            res = self.simulate_path_from_daily_pnls(eval_pnls, funded_pnls)
 
-            if passed:
+            if res["passed_eval"]:
                 passed_eval_count += 1
+                e_days = res["eval_days"]
                 eval_days_list.append(e_days)
-                if payout:
+                if e_days <= 90:
+                    passed_90d_count += 1
+                if e_days <= 180:
+                    passed_180d_count += 1
+                if res["got_payout"]:
                     payout_count += 1
-                    payout_days_list.append(f_days)
+                    payout_days_list.append(res["funded_days"])
+            else:
+                if res["breached_eval"]:
+                    breached_eval_count += 1
+                else:
+                    timeout_eval_count += 1
 
         pass_rate = (passed_eval_count / num_simulations) * 100.0
-        payout_rate = (payout_count / max(1, passed_eval_count)) * 100.0
-        overall_payout_rate = (payout_count / num_simulations) * 100.0
+        pass_rate_90d = (passed_90d_count / num_simulations) * 100.0
+        pass_rate_180d = (passed_180d_count / num_simulations) * 100.0
+        breach_rate = (breached_eval_count / num_simulations) * 100.0
+        timeout_rate = (timeout_eval_count / num_simulations) * 100.0
+
+        conditional_payout_rate = (payout_count / max(1, passed_eval_count)) * 100.0
+        unconditional_payout_rate = (payout_count / num_simulations) * 100.0
 
         median_eval_days = float(np.median(eval_days_list)) if eval_days_list else 0.0
         mean_eval_days = float(np.mean(eval_days_list)) if eval_days_list else 0.0
         mean_payout_days = float(np.mean(payout_days_list)) if payout_days_list else 0.0
 
-        # Expected evaluation fee cost per successful pass ($87 base fee)
-        # Cost = 87 / (pass_rate / 100)
         avg_fee_cost = (87.0 / (pass_rate / 100.0)) if pass_rate > 0 else 99999.0
+
+        # Net Expected Value per $87 attempt:
+        # First payout is typically up to $1,500 with 90% payout split ($1,350 net payout)
+        ev_net = (unconditional_payout_rate / 100.0) * (1500.0 * 0.90) - 87.0
 
         return SimulationResults(
             model_name=model_name,
             pass_rate_pct=pass_rate,
+            pass_rate_90d=pass_rate_90d,
+            pass_rate_180d=pass_rate_180d,
+            breach_rate_pct=breach_rate,
+            timeout_rate_pct=timeout_rate,
             median_days_to_pass=median_eval_days,
             mean_days_to_pass=mean_eval_days,
             avg_fee_cost_per_pass=avg_fee_cost,
-            payout_rate_pct=payout_rate,
+            conditional_payout_rate_pct=conditional_payout_rate,
+            unconditional_payout_rate_pct=unconditional_payout_rate,
             mean_days_to_payout=mean_payout_days,
+            expected_net_value=ev_net,
             total_evaluations=num_simulations
         )

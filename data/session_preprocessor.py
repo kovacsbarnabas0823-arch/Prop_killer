@@ -168,12 +168,15 @@ class SessionDataPreprocessor:
         logger.info("Pre-grouping sessions into daily lookup table...")
         self.daily_dict = {d: group for d, group in df.groupby(df.index.date)}
 
-        logger.info("Precomputing Zarattini-Baltussen time-of-day noise envelopes...")
-        checkpoints = ["10:30", "10:45", "11:00", "11:15", "11:30", "11:45", "12:00", "12:30", "13:00", "13:30"]
+        logger.info("Precomputing Zarattini-Baltussen time-of-day noise envelopes (Multi-Horizon 10:00-14:00)...")
+        checkpoints = [
+            "10:00", "10:15", "10:30", "10:45", "11:00", "11:15", "11:30", "11:45",
+            "12:00", "12:15", "12:30", "12:45", "13:00", "13:15", "13:30", "13:45", "14:00"
+        ]
         dates_list = sorted(list(self.daily_dict.keys()))
 
         # For each checkpoint, extract Close across all days
-        rth_1m = df.between_time("09:30", "13:30")
+        rth_1m = df.between_time("09:30", "14:00")
         opens_0930 = rth_1m.between_time("09:30", "09:30").groupby(rth_1m.between_time("09:30", "09:30").index.date)["Open"].first()
 
         moves_by_cp = {}
@@ -185,7 +188,7 @@ class SessionDataPreprocessor:
             sigma_cp = df_cp["move"].rolling(window=14).mean().shift(1)
             moves_by_cp[cp] = sigma_cp.to_dict()
 
-        # Build noise_band_map
+        # Build noise_band_map with Regime-Adaptive Multiplier (Kd)
         for d in dates_list:
             if d not in self.prev_day_close_map or pd.isna(self.prev_day_close_map[d]):
                 continue
@@ -200,12 +203,27 @@ class SessionDataPreprocessor:
             ref_high = max(d_open, p_close)
             ref_low = min(d_open, p_close)
 
+            # Compute prior day's RTH range ratio (comp_ratio = PriorDay_RTH_Range / ATR_14)
+            prev_rng = self.prev_day_range_map.get(d)
+            atr_val = self.daily_atr_map.get(d)
+            if prev_rng is not None and not pd.isna(prev_rng) and atr_val is not None and not pd.isna(atr_val) and atr_val > 0:
+                comp_ratio = prev_rng / atr_val
+            else:
+                comp_ratio = 1.0
+
+            if comp_ratio <= 0.85:
+                kd = 1.12
+            elif comp_ratio <= 1.20:
+                kd = 1.25
+            else:
+                kd = 1.35
+
             self.noise_band_map[d] = {}
             for cp in checkpoints:
                 sig = moves_by_cp[cp].get(d)
                 if sig is not None and not pd.isna(sig) and sig > 0:
-                    upper = ref_high + (1.25 * sig)
-                    lower = ref_low - (1.25 * sig)
+                    upper = ref_high + (kd * sig)
+                    lower = ref_low - (kd * sig)
                     self.noise_band_map[d][cp] = (upper, lower)
 
     def get_session_bars(self, session_date) -> pd.DataFrame:

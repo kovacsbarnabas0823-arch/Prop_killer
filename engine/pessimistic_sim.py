@@ -60,13 +60,19 @@ class PessimisticExecutionSimulator:
             initial_sl = signal.stop_loss_price
             tp_target = signal.tp1_price
             be_price = entry_price + 2.0
-            be_trigger_price = entry_price + (signal.be_trigger_r * signal.sl_dist) if signal.be_trigger_r > 0 else be_price
+            if signal.be_trigger_r is not None and signal.be_trigger_r > 0:
+                be_trigger_price = entry_price + (signal.be_trigger_r * signal.sl_dist)
+            else:
+                be_trigger_price = None
         else:
             entry_price = open_0 - self.slippage_points
             initial_sl = signal.stop_loss_price
             tp_target = signal.tp1_price
             be_price = entry_price - 2.0
-            be_trigger_price = entry_price - (signal.be_trigger_r * signal.sl_dist) if signal.be_trigger_r > 0 else be_price
+            if signal.be_trigger_r is not None and signal.be_trigger_r > 0:
+                be_trigger_price = entry_price - (signal.be_trigger_r * signal.sl_dist)
+            else:
+                be_trigger_price = None
 
         current_sl = initial_sl
         is_be_activated = False
@@ -162,8 +168,8 @@ class PessimisticExecutionSimulator:
                     ))
                 return completed_trades
 
-            # 3. Delayed Breakeven Check
-            if not is_be_activated:
+            # 3. Delayed Breakeven Check (Disabled by default if be_trigger_price is None)
+            if be_trigger_price is not None and not is_be_activated:
                 if direction == 1 and bar_high >= be_trigger_price:
                     is_be_activated = True
                     current_sl = be_price
@@ -171,10 +177,11 @@ class PessimisticExecutionSimulator:
                     is_be_activated = True
                     current_sl = be_price
 
-            # 4. Dynamic Trailing Indicator Exit Check (Evaluated on confirmed candle close)
+            # 4. Dynamic Trailing Indicator Exit Check (Evaluated on confirmed 5-minute candle close)
             # Engage trailing once activation threshold is reached (e.g. is_be_activated or immediate)
             trail_active = is_be_activated or (signal.trail_activation_r <= 0.0)
-            if trail_active and trail_vals is not None:
+            is_5m_close = ((bar_time.minute + 1) % 5 == 0) or (i + 1 < n_bars and (times[i+1].minute // 5 != bar_time.minute // 5)) or (i == n_bars - 1)
+            if trail_active and trail_vals is not None and is_5m_close:
                 val = trail_vals[i]
                 if not np.isnan(val):
                     if signal.trail_rule == "VWAP_BAND" and trail_upper_vals is not None and trail_lower_vals is not None:
@@ -201,7 +208,7 @@ class PessimisticExecutionSimulator:
                                 ))
                                 return completed_trades
                     else:
-                        # Standard VWAP or EMA close cross
+                        # Standard VWAP or EMA confirmed 5m close cross
                         if direction == 1 and bar_close < val:
                             exit_price = bar_close - self.slippage_points
                             rem_qty = qty_runner if (scale_out_mode and tp1_hit) else contract_qty

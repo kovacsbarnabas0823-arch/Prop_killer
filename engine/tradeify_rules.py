@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import logging
 from typing import Dict, Any, Optional, Tuple
+import numpy as np
 
 logger = logging.getLogger("TradeifyRules")
 
@@ -38,8 +39,8 @@ class TradeifyAccountConfig:
     DAILY_LOSS_LIMIT_HARD: float = -1250.0       # Tradeify daily circuit breaker
     INTERNAL_DAILY_STOP: float = -600.0          # Internal protective daily stop
     HARD_EOD_FLATTEN_TIME: str = "15:44:00"      # All positions flattened 60s before 15:45:00
-    MAX_FUNDED_DAILY_PROFIT: float = 825.0       # Funded 35% consistency governor ceiling ($2,500 * 0.35 = $875)
-    FUNDED_PAYOUT_TARGET: float = 52500.0        # +$2,500 for first payout
+    MAX_FUNDED_DAILY_PROFIT: float = 920.0       # Funded 35% consistency governor ceiling ($2,650 * 0.35 = $927.50)
+    FUNDED_PAYOUT_TARGET: float = 52650.0        # +$2,650 for first payout
     MIN_FUNDED_WINNING_DAYS: int = 5             # 5 trading days with profit >= $150
     MIN_WINNING_DAY_PROFIT: float = 150.0
     MNQ_POINT_VALUE: float = 2.0                 # $2.00 per point
@@ -102,47 +103,48 @@ class TradeifyAccountState:
         self.is_governor_halted = False
         self.total_trading_days += 1
 
-    def get_optimal_mnq_size(self) -> int:
+    def get_optimal_mnq_size(self, sl_dist_pts: float = 30.0) -> int:
         """
-        Two-Phase State-Dependent Bellman Position Sizing:
-        Calculates optimal MNQ contract count based on account phase, buffer, and floor lock.
+        Decoupled Two-Regime Volatility-Normalized Stochastic Position Controller.
+        Calculates optimal MNQ contract count from state-dependent target dollar risk R_target:
+            per_contract_risk_usd = (sl_dist_pts * 2.00) + 4.48  # $2/pt MNQ + $2.48 comm + $2.00 slippage
+            contracts = int(np.clip(np.round(R_target / per_contract_risk_usd), 1, 15))
         """
         if self.is_breached or self.is_daily_stopped or self.is_governor_halted:
             return 0
 
         buffer = self.usable_buffer
-        net_profit = self.net_profit
+        profit = self.net_profit
         current_equity = self.current_equity
 
         if self.phase == AccountPhase.EVALUATION:
-            # Phase 1: EVALUATION (0% Consistency Rule — Maximize Velocity to $53,000)
-            # Tier 3 (Locked-Floor Convex Sprint):
-            if current_equity >= self.config.FLOOR_LOCK_TRIGGER:
-                return 6
-            # Tier 2 (Mid-Buffer Sprint):
-            if net_profit >= 1000.0 and buffer >= 1300.0 and current_equity < self.config.FLOOR_LOCK_TRIGGER:
-                return 4
-            # Tier 1 (Base Accumulation):
-            if 900.0 <= buffer < 1400.0 and net_profit < 1000.0:
-                return 3
-            # If buffer >= 1400.0 but net_profit < 1000.0, intermediate tier 3 or 4:
-            if buffer >= 1400.0 and current_equity < self.config.FLOOR_LOCK_TRIGGER:
-                return 4
-            # Tier 0 (Survival Shield):
-            return 2
+            # Regime 1: EVALUATION Phase (0% Consistency Rule - Maximize First-Passage Velocity)
+            if current_equity >= 51900.0:
+                r_target = 440.0   # Tier 3: Lock-Zone Sprint
+            elif profit >= 700.0 and buffer >= 1300.0:
+                r_target = 320.0   # Tier 2: Mid-Buffer Sprint
+            elif buffer >= 850.0:
+                r_target = 225.0   # Tier 1: Base Accumulation
+            else:
+                r_target = 140.0   # Tier 0: Survival Shield (buffer < $850)
 
         elif self.phase == AccountPhase.FUNDED:
-            # Phase 2: FUNDED (35% Consistency Rule, $825 daily cap, 5 winning days)
-            # Post-Lock Extraction:
-            if self.eod_hwm >= self.config.FLOOR_LOCK_TRIGGER or self.is_floor_locked:
-                return 4
-            # Pre-Lock Protection:
-            if buffer < 1000.0:
-                return 2
+            # Regime 2: FUNDED Phase (35% Consistency Rule, $920 cap, Payout Target = $52,650)
+            if buffer < 1100.0:
+                r_target = 105.0   # Drawdown Shield: buffer < $1,100
+            elif not self.is_floor_locked and self.eod_hwm < 52100.0:
+                r_target = 150.0   # Pre-Lock Trailing Zone
             else:
-                return 3
+                r_target = 215.0   # Post-Lock Static Zone (floor locked at $50,100)
+        else:
+            r_target = 150.0
 
-        return 2
+        per_contract_risk_usd = (sl_dist_pts * self.config.MNQ_POINT_VALUE) + 4.48
+        if per_contract_risk_usd <= 0:
+            return 2
+
+        contracts = int(np.clip(np.round(r_target / per_contract_risk_usd), 1, 15))
+        return contracts
 
     def update_intraday_pnl(self, delta_pnl: float) -> Tuple[bool, Optional[str]]:
         """
@@ -173,11 +175,11 @@ class TradeifyAccountState:
             self.is_daily_stopped = True
             return False, f"INTERNAL DAILY STOP ENGAGED: Intraday PnL (${self.intraday_pnl:.2f}) reached internal stop limit."
 
-        # 4. Funded Consistency Governor Ceiling (+$825.00)
+        # 4. Funded Consistency Governor Ceiling (+$920.00 protecting 35% rule on $2,650 payout target)
         if self.phase == AccountPhase.FUNDED:
             if self.intraday_pnl >= self.config.MAX_FUNDED_DAILY_PROFIT:
                 self.is_governor_halted = True
-                return False, f"FUNDED CONSISTENCY GOVERNOR: Daily profit (${self.intraday_pnl:.2f}) reached +$825 ceiling. Halting to protect 35% rule."
+                return False, f"FUNDED CONSISTENCY GOVERNOR: Daily profit (${self.intraday_pnl:.2f}) reached +${self.config.MAX_FUNDED_DAILY_PROFIT:.2f} ceiling. Halting to protect 35% rule."
 
         # 5. Evaluation Target Check ($53,000.00)
         if self.phase == AccountPhase.EVALUATION and current_equity >= self.config.EVAL_PROFIT_TARGET:
@@ -232,7 +234,7 @@ class TradeifyAccountState:
             if self.eod_hwm >= self.config.FLOOR_LOCK_TRIGGER:
                 self.is_floor_locked = True
                 self.current_floor = self.config.LOCKED_FLOOR
-                logger.info(
+                logger.debug(
                     f"FLOOR LOCK ACTIVATED: EOD HWM (${self.eod_hwm:.2f}) >= ${self.config.FLOOR_LOCK_TRIGGER:.2f}. "
                     f"Floor permanently locked at ${self.config.LOCKED_FLOOR:.2f}."
                 )

@@ -29,7 +29,7 @@ class TradeSignal:
     tp1_dist: float = 0.0                         # Distance to TP1 in points
     tp2_dist: float = 0.0                         # Distance to TP2 in points
     scale_out_tp1: bool = False                   # False = Hold 100% position to asymmetric target/trail/EOD
-    be_trigger_r: float = 1.5                     # Move stop to BE only after reaching +be_trigger_r * sl_dist
+    be_trigger_r: Optional[float] = None          # None = No price-based BE scratch (pure structural trailing)
     breakeven_trigger_price: Optional[float] = None
     trail_rule: Optional[str] = None              # "VWAP", "VWAP_BAND", "EMA15_12"
     trail_activation_r: float = 0.0               # R-multiple needed to engage trail (0.0 = immediate)

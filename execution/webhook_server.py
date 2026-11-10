@@ -92,6 +92,12 @@ async def receive_alpha_signal(request: Request):
     strategy_id = payload.get("strategy_id", "UNKNOWN")
     symbol = payload.get("symbol", "MNQ")
 
+    # Rule A: Pre-Lock Safe-Harbor Protocol (Rodosthenous & Zhang Optimal Stopping)
+    if system_state["is_funded"] and system_state["current_balance"] < 52100.0 and strategy_id == "H4":
+        if system_state["intraday_pnl"] >= 220.0:
+            logger.info(f"Signal H4 skipped: Qualification Day Lock-In active (${system_state['intraday_pnl']:.2f} >= $220 in Pre-Lock zone).")
+            return {"status": "skipped", "reason": "Qualification Day Lock-In active"}
+
     # Strict Micro contract enforcement
     if "MNQ" not in symbol:
         raise HTTPException(status_code=400, detail=f"Contract Exclusivity Breach: {symbol} rejected. Only MNQ permitted.")

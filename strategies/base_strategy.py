@@ -32,7 +32,9 @@ class TradeSignal:
     be_trigger_r: Optional[float] = None          # None = No price-based BE scratch (pure structural trailing)
     breakeven_trigger_price: Optional[float] = None
     trail_rule: Optional[str] = None              # "VWAP", "VWAP_BAND", "EMA15_12"
+    trail_band_mode: str = "WIDE"                 # "TIGHT" (max for Long, min for Short) vs "WIDE" (min for Long, max for Short)
     trail_activation_r: float = 0.0               # R-multiple needed to engage trail (0.0 = immediate)
+    ratchet_tiers: Optional[List[Tuple[float, float]]] = None # Maroy (2025) [(2.5, 1.2), (4.0, 2.5)]
     scratch_bars: Optional[int] = None            # Fast scratch timeout
     scratch_threshold_r: float = 0.5
     hard_time_exit: Optional[str] = None          # e.g. "12:00:00", "15:44:00"

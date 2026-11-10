@@ -1,35 +1,27 @@
 """
-Module 3: Multi-Horizon Adaptive Noise-Band Momentum Engine (strategies/h3_noise_band_momentum.py)
+Module 3: Zarattini-Baltussen Noise-Band Momentum with Seeck (2026) Nasdaq Asymmetry
 Author: Principal Quantitative Architect & Financial Engineer
 
-Academic & Quantitative Foundation:
+Academic & Quantitative Foundations:
   - Zarattini, Aziz, & Barbon (2024, SSRN 4824172): "An Effective Intraday Momentum Strategy"
-  - Baltussen et al. (2021, JFE): Institutional Fixings & Rebalancing Flow
+  - Seeck (2026, SSRN 7364204): "Nasdaq Asymmetry & Directional Breakout Conditioning"
+  - Baltussen, Swinkels, & van Vliet (2021, JFE): "Predictable Intraday Rebalancing Flows"
 
-Strategy Rules (Phase 3 Upgraded):
-  - Causal 14-Day Multi-Horizon Time-of-Day Noise Envelope:
-      * Computed across 15-minute intervals from 10:00:00 to 14:00:00 NY.
-      * Regime-Adaptive Multiplier (Kd):
-          - Compressed Prior Day (comp_ratio <= 0.85): Kd = 1.12
-          - Normal Day (0.85 < comp_ratio <= 1.20): Kd = 1.25
-          - Exhausted Wide Day (comp_ratio > 1.20): Kd = 1.35
-      * Gap-Adjusted Boundaries:
-          UpperBand_{d,t} = max(Open_0930, PrevClose_1600) + Kd * sigma_{d,t}
-          LowerBand_{d,t} = min(Open_0930, PrevClose_1600) - Kd * sigma_{d,t}
-  - Multi-Horizon Execution Window: 10:00:00 to 14:00:00 NY.
-  - Entry 1 (Primary Breakout):
-      * Long: Close_5m > UpperBand AND Close_5m > VWAP_RTH AND EMA_5m(9) > VWAP_RTH AND Vol_5m >= 1.10 * SMA(Vol_5m, 12).
-      * Short: Close_5m < LowerBand AND Close_5m < VWAP_RTH AND EMA_5m(9) < VWAP_RTH AND Vol_5m >= 1.10 * SMA(Vol_5m, 12).
-  - Entry 2 (Continuation Re-Entry, max 2 entries/day):
-      * If Entry 1 closed before 13:00 by 5m trailing stop and daily PnL > -$300.0:
-      * Long: Close_5m > UpperBand AND Close_5m > DayHigh_prior AND Close_5m > VWAP_RTH AND EMA_5m(9) > VWAP_RTH.
-      * Short: Close_5m < LowerBand AND Close_5m < DayLow_prior AND Close_5m < VWAP_RTH AND EMA_5m(9) < VWAP_RTH.
-  - Structural Exit Geometry:
-      * SL_dist = clip(abs(Entry - VWAP_RTH) + 4.0, 22.0, 48.0) NQ points.
-      * Zero price-based Breakeven scratches (be_trigger_r = None, scale_out_tp1 = False).
-      * Confirmed 5-minute bar-close trailing: exit below min(UpperBand, VWAP_RTH) for Long
-        (or above max(LowerBand, VWAP_RTH) for Short).
-      * Hard flatten at 15:44:00 NY.
+Phase 4 Institutional Architecture:
+  - Strict Execution Window: 10:30:00 to 13:30:00 NY (allowing 60m Initial Balance 09:30-10:30 and 10:00 AM macro news to settle).
+  - Single Trade Per Day: Occam's razor (eliminating Phase 3 false-breakout noise and Entry 2 whipsaws).
+  - Robust Noise Envelope: Kd = 1.25 multiplier (eliminating the tight Kd=1.12 false-breakout trigger).
+  - Seeck (2026) Long/Short Asymmetry Filter:
+      * Long: Close > UpperBand AND Close > VWAP_RTH AND EMA_5m(9) > VWAP_RTH AND Vol_5m >= 1.10 * SMA(Vol_5m, 12).
+      * Short: Close < LowerBand AND Close < VWAP_RTH AND EMA_5m(9) < VWAP_RTH AND Vol_5m >= 1.10 * SMA(Vol_5m, 12)
+               AND Bearish Structure: (Open_0930 <= PrevClose_1600 OR Close_5m < PrevDay_Low OR ATR_14 >= SMA(ATR_14, 20)).
+  - Risk & Exit Geometry:
+      * Initial Structural Hard Stop: SL_dist = clip(abs(Entry - VWAP_RTH) + 4.0, 22.0, 48.0) NQ points.
+      * Zero Price-Based Breakeven Scratch: (be_trigger_r = None, scale_out_tp1 = False).
+      * Confirmed 5-Minute Bar-Close Structural Trailing Stop:
+          - Long: Exit on confirmed 5m bar close below min(UpperBand, VWAP_RTH).
+          - Short: Exit on confirmed 5m bar close above max(LowerBand, VWAP_RTH).
+      * Hard Session Flatten at 15:44:00 NY.
 """
 
 from __future__ import annotations
@@ -51,15 +43,17 @@ class H3NoiseBandMomentum(BaseStrategy):
         sl_vwap_buffer: float = 4.0,
         ema_span: int = 9,
         vol_factor: float = 1.10,
-        vol_sma_bars: int = 12
+        vol_sma_bars: int = 12,
+        use_seeck_asymmetry: bool = True
     ):
-        super().__init__(name="H3_MultiHorizon_Adaptive_NoiseBand", strategy_id="H3")
+        super().__init__(name="H3_Zarattini_NoiseBand_Momentum", strategy_id="H3")
         self.min_sl_dist = min_sl_dist
         self.max_sl_dist = max_sl_dist
         self.sl_vwap_buffer = sl_vwap_buffer
         self.ema_span = ema_span
         self.vol_factor = vol_factor
         self.vol_sma_bars = vol_sma_bars
+        self.use_seeck_asymmetry = use_seeck_asymmetry
 
     def evaluate_session(
         self,
@@ -106,18 +100,18 @@ class H3NoiseBandMomentum(BaseStrategy):
         ema9_5m = resampled_5m["Close"].ewm(span=self.ema_span, adjust=False).mean()
         vol_sma_5m = resampled_5m["Volume"].rolling(window=self.vol_sma_bars, min_periods=4).mean()
 
-        # Multi-Horizon Window: 10:00:00 to 14:00:00 NY
-        eval_window_5m = resampled_5m.between_time("10:00", "14:00")
+        # Phase 4 Strict Execution Window: 10:30:00 to 13:30:00 NY
+        eval_window_5m = resampled_5m.between_time("10:30", "13:30")
         if eval_window_5m.empty:
             return []
 
-        signals: List[TradeSignal] = []
-        primary_emitted = False
-        primary_dir = 0
-        primary_bar_time = None
+        # Reference daily features for Seeck Asymmetry
+        rth_sub = df_session_1m.between_time("09:30", "09:30")
+        d_open = float(rth_sub.iloc[0]["Open"]) if not rth_sub.empty else prev_close
+        prev_low = preprocessor.prev_day_low_map.get(session_date) if preprocessor else None
+        sma_atr20 = preprocessor.daily_atr_sma20_map.get(session_date, 0.0) if preprocessor and hasattr(preprocessor, "daily_atr_sma20_map") else daily_atr
 
-        # Track running session high/low for continuation re-entry
-        rth_5m_all = resampled_5m.between_time("09:30", "15:44")
+        signals: List[TradeSignal] = []
 
         for bar_start, bar_5m in eval_window_5m.iterrows():
             bar_end_time = bar_start + pd.Timedelta(minutes=5)
@@ -141,51 +135,51 @@ class H3NoiseBandMomentum(BaseStrategy):
 
             vol_ok = (vol_sma_val > 0 and vol_5m >= self.vol_factor * vol_sma_val)
 
-            # Prior bars up to bar_start to determine running DayHigh / DayLow
-            prior_rth = rth_5m_all.loc[rth_5m_all.index < bar_start]
-            running_day_high = float(prior_rth["High"].max()) if not prior_rth.empty else close_5m
-            running_day_low = float(prior_rth["Low"].min()) if not prior_rth.empty else close_5m
+            # --- LONG BREAKOUT ---
+            if close_5m > upper_band and close_5m > curr_vwap and curr_ema > curr_vwap and vol_ok:
+                future_1m = df_session_1m.loc[df_session_1m.index >= bar_end_time]
+                if not future_1m.empty:
+                    open_1m = float(future_1m.iloc[0]["Open"])
+                    entry_price = open_1m + 0.50
+                    raw_sl = abs(entry_price - curr_vwap) + self.sl_vwap_buffer
+                    sl_dist = float(np.clip(raw_sl, self.min_sl_dist, self.max_sl_dist))
+                    sl_price = entry_price - sl_dist
 
-            # --- ENTRY 1: PRIMARY BREAKOUT ---
-            if not primary_emitted:
-                if close_5m > upper_band and close_5m > curr_vwap and curr_ema > curr_vwap and vol_ok:
-                    future_1m = df_session_1m.loc[df_session_1m.index >= bar_end_time]
-                    if not future_1m.empty:
-                        open_1m = float(future_1m.iloc[0]["Open"])
-                        entry_price = open_1m + 0.50
-                        raw_sl = abs(entry_price - curr_vwap) + self.sl_vwap_buffer
-                        sl_dist = float(np.clip(raw_sl, self.min_sl_dist, self.max_sl_dist))
-                        sl_price = entry_price - sl_dist
+                    signals.append(TradeSignal(
+                        strategy_id="H3",
+                        strategy_name="H3_Zarattini_NoiseBand_Momentum",
+                        timestamp=bar_end_time,
+                        execution_time=bar_end_time,
+                        direction=1,
+                        entry_price=entry_price,
+                        stop_loss_price=sl_price,
+                        tp1_price=None,
+                        sl_dist=sl_dist,
+                        scale_out_tp1=False,
+                        be_trigger_r=None,
+                        trail_rule="VWAP_BAND",
+                        trail_band_mode="WIDE",
+                        trail_activation_r=0.0,
+                        hard_time_exit="15:44:00",
+                        metadata={
+                            "wave": 1,
+                            "upper_band": upper_band,
+                            "vwap": curr_vwap,
+                            "sl_dist": sl_dist
+                        }
+                    ))
+                    break  # Exactly 1 trade per day!
 
-                        signals.append(TradeSignal(
-                            strategy_id="H3",
-                            strategy_name="H3_MultiHorizon_Adaptive_NoiseBand",
-                            timestamp=bar_end_time,
-                            execution_time=bar_end_time,
-                            direction=1,
-                            entry_price=entry_price,
-                            stop_loss_price=sl_price,
-                            tp1_price=None,
-                            sl_dist=sl_dist,
-                            scale_out_tp1=False,
-                            be_trigger_r=None,  # Zero BE scratches!
-                            trail_rule="VWAP_BAND",
-                            trail_activation_r=0.0,
-                            hard_time_exit="15:44:00",
-                            metadata={
-                                "wave": 1,
-                                "is_reentry": False,
-                                "upper_band": upper_band,
-                                "vwap": curr_vwap,
-                                "sl_dist": sl_dist
-                            }
-                        ))
-                        primary_emitted = True
-                        primary_dir = 1
-                        primary_bar_time = bar_start
-                        continue
+            # --- SHORT BREAKOUT (with Seeck 2026 Asymmetry Filter) ---
+            elif close_5m < lower_band and close_5m < curr_vwap and curr_ema < curr_vwap and vol_ok:
+                short_valid = True
+                if self.use_seeck_asymmetry:
+                    # Bearish Intraday/Daily Structure: Non-gap-up day OR close < prev_low OR expanding ATR
+                    is_bearish = (d_open <= prev_close) or (prev_low is not None and close_5m < prev_low) or (daily_atr >= sma_atr20)
+                    if not is_bearish:
+                        short_valid = False
 
-                elif close_5m < lower_band and close_5m < curr_vwap and curr_ema < curr_vwap and vol_ok:
+                if short_valid:
                     future_1m = df_session_1m.loc[df_session_1m.index >= bar_end_time]
                     if not future_1m.empty:
                         open_1m = float(future_1m.iloc[0]["Open"])
@@ -196,7 +190,7 @@ class H3NoiseBandMomentum(BaseStrategy):
 
                         signals.append(TradeSignal(
                             strategy_id="H3",
-                            strategy_name="H3_MultiHorizon_Adaptive_NoiseBand",
+                            strategy_name="H3_Zarattini_NoiseBand_Momentum",
                             timestamp=bar_end_time,
                             execution_time=bar_end_time,
                             direction=-1,
@@ -205,93 +199,18 @@ class H3NoiseBandMomentum(BaseStrategy):
                             tp1_price=None,
                             sl_dist=sl_dist,
                             scale_out_tp1=False,
-                            be_trigger_r=None,  # Zero BE scratches!
+                            be_trigger_r=None,
                             trail_rule="VWAP_BAND",
+                            trail_band_mode="WIDE",
                             trail_activation_r=0.0,
                             hard_time_exit="15:44:00",
                             metadata={
                                 "wave": 1,
-                                "is_reentry": False,
                                 "lower_band": lower_band,
                                 "vwap": curr_vwap,
                                 "sl_dist": sl_dist
                             }
                         ))
-                        primary_emitted = True
-                        primary_dir = -1
-                        primary_bar_time = bar_start
-                        continue
-
-            # --- ENTRY 2: CONTINUATION RE-ENTRY ---
-            # Evaluated after primary entry, before 13:00 NY, requiring close beyond BOTH band and running session extreme
-            elif primary_emitted and bar_start > primary_bar_time and bar_start.time() < pd.Timestamp("13:00:00").time():
-                if primary_dir == 1:
-                    if close_5m > upper_band and close_5m > running_day_high and close_5m > curr_vwap and curr_ema > curr_vwap:
-                        future_1m = df_session_1m.loc[df_session_1m.index >= bar_end_time]
-                        if not future_1m.empty:
-                            open_1m = float(future_1m.iloc[0]["Open"])
-                            entry_price = open_1m + 0.50
-                            raw_sl = abs(entry_price - curr_vwap) + self.sl_vwap_buffer
-                            sl_dist = float(np.clip(raw_sl, self.min_sl_dist, self.max_sl_dist))
-                            sl_price = entry_price - sl_dist
-
-                            signals.append(TradeSignal(
-                                strategy_id="H3",
-                                strategy_name="H3_MultiHorizon_Adaptive_NoiseBand",
-                                timestamp=bar_end_time,
-                                execution_time=bar_end_time,
-                                direction=1,
-                                entry_price=entry_price,
-                                stop_loss_price=sl_price,
-                                tp1_price=None,
-                                sl_dist=sl_dist,
-                                scale_out_tp1=False,
-                                be_trigger_r=None,
-                                trail_rule="VWAP_BAND",
-                                trail_activation_r=0.0,
-                                hard_time_exit="15:44:00",
-                                metadata={
-                                    "wave": 2,
-                                    "is_reentry": True,
-                                    "upper_band": upper_band,
-                                    "vwap": curr_vwap,
-                                    "sl_dist": sl_dist
-                                }
-                            ))
-                            break  # Maximum 2 entries emitted
-                elif primary_dir == -1:
-                    if close_5m < lower_band and close_5m < running_day_low and close_5m < curr_vwap and curr_ema < curr_vwap:
-                        future_1m = df_session_1m.loc[df_session_1m.index >= bar_end_time]
-                        if not future_1m.empty:
-                            open_1m = float(future_1m.iloc[0]["Open"])
-                            entry_price = open_1m - 0.50
-                            raw_sl = abs(curr_vwap - entry_price) + self.sl_vwap_buffer
-                            sl_dist = float(np.clip(raw_sl, self.min_sl_dist, self.max_sl_dist))
-                            sl_price = entry_price + sl_dist
-
-                            signals.append(TradeSignal(
-                                strategy_id="H3",
-                                strategy_name="H3_MultiHorizon_Adaptive_NoiseBand",
-                                timestamp=bar_end_time,
-                                execution_time=bar_end_time,
-                                direction=-1,
-                                entry_price=entry_price,
-                                stop_loss_price=sl_price,
-                                tp1_price=None,
-                                sl_dist=sl_dist,
-                                scale_out_tp1=False,
-                                be_trigger_r=None,
-                                trail_rule="VWAP_BAND",
-                                trail_activation_r=0.0,
-                                hard_time_exit="15:44:00",
-                                metadata={
-                                    "wave": 2,
-                                    "is_reentry": True,
-                                    "lower_band": lower_band,
-                                    "vwap": curr_vwap,
-                                    "sl_dist": sl_dist
-                                }
-                            ))
-                            break
+                        break  # Exactly 1 trade per day!
 
         return signals

@@ -123,7 +123,13 @@ class PortfolioOrchestrator:
             if self.account.is_breached or self.account.is_daily_stopped or self.account.is_governor_halted:
                 break
 
-            optimal_qty = self.account.get_optimal_mnq_size(sl_dist_pts=sig.sl_dist)
+            # Rule A: Pre-Lock Safe-Harbor Protocol (Rodosthenous & Zhang Optimal Stopping)
+            if sig.strategy_id == "H4" and self.account.phase == AccountPhase.FUNDED:
+                if self.account.intraday_pnl >= 220.0 and not self.account.is_floor_locked and self.account.eod_hwm < 52100.0:
+                    logger.debug(f"H4 skipped: Qualification Day Lock-In active (${self.account.intraday_pnl:.2f} >= $220 in Pre-Lock zone).")
+                    continue
+
+            optimal_qty = self.account.get_optimal_mnq_size(sl_dist_pts=sig.sl_dist, atr_14=daily_atr)
             if optimal_qty <= 0:
                 break
 

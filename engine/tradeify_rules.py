@@ -103,12 +103,15 @@ class TradeifyAccountState:
         self.is_governor_halted = False
         self.total_trading_days += 1
 
-    def get_optimal_mnq_size(self, sl_dist_pts: float = 30.0) -> int:
+    def get_optimal_mnq_size(self, sl_dist_pts: float = 30.0, atr_14: Optional[float] = None) -> int:
         """
-        Decoupled Two-Regime Volatility-Normalized Stochastic Position Controller.
-        Calculates optimal MNQ contract count from state-dependent target dollar risk R_target:
-            per_contract_risk_usd = (sl_dist_pts * 2.00) + 4.48  # $2/pt MNQ + $2.48 comm + $2.00 slippage
-            contracts = int(np.clip(np.round(R_target / per_contract_risk_usd), 1, 15))
+        Zarattini (2024) ATR_14 Volatility Normalization + Pre-Lock Safe-Harbor Protocol.
+        Calculates optimal MNQ contract count:
+            ref_vol_pts = 0.22 * atr_14 if (atr_14 and atr_14 > 0) else max(sl_dist_pts, 30.0)
+            unit_vol_risk_usd = (ref_vol_pts * 2.00) + 4.48
+            base_contracts = int(np.clip(np.round(r_target / unit_vol_risk_usd), 1, 12))
+            max_safe_contracts = int(np.max([1, np.floor((1.35 * r_target) / ((sl_dist_pts * 2.00) + 4.48))]))
+            contracts = min(base_contracts, max_safe_contracts)
         """
         if self.is_breached or self.is_daily_stopped or self.is_governor_halted:
             return 0
@@ -127,24 +130,29 @@ class TradeifyAccountState:
                 r_target = 225.0   # Tier 1: Base Accumulation
             else:
                 r_target = 140.0   # Tier 0: Survival Shield (buffer < $850)
-
         elif self.phase == AccountPhase.FUNDED:
-            # Regime 2: FUNDED Phase (35% Consistency Rule, $920 cap, Payout Target = $52,650)
-            if buffer < 1100.0:
-                r_target = 105.0   # Drawdown Shield: buffer < $1,100
-            elif not self.is_floor_locked and self.eod_hwm < 52100.0:
-                r_target = 150.0   # Pre-Lock Trailing Zone
+            # Regime 2: FUNDED Phase (Pre-Lock vs Post-Lock Two-Zone Escalation, $920 cap)
+            if not self.is_floor_locked and self.eod_hwm < self.config.FLOOR_LOCK_TRIGGER:
+                # Zone 1: Trailing Danger Zone (EOD_HWM < $52,100)
+                if buffer < 1100.0:
+                    r_target = 100.0   # Survival Shield
+                else:
+                    r_target = 135.0   # Conservative Trailing Target
             else:
-                r_target = 215.0   # Post-Lock Static Zone (floor locked at $50,100)
+                # Zone 2: Static Locked Zone (EOD_HWM >= $52,100, Floor Locked at $50,100)
+                r_target = 230.0       # Sprint to $52,650 payout
         else:
             r_target = 150.0
 
-        per_contract_risk_usd = (sl_dist_pts * self.config.MNQ_POINT_VALUE) + 4.48
-        if per_contract_risk_usd <= 0:
-            return 2
+        ref_vol_pts = 0.22 * atr_14 if (atr_14 is not None and atr_14 > 0) else max(sl_dist_pts, 30.0)
+        unit_vol_risk_usd = (ref_vol_pts * self.config.MNQ_POINT_VALUE) + 4.48
+        base_contracts = int(np.clip(np.round(r_target / unit_vol_risk_usd), 1, 12))
 
-        contracts = int(np.clip(np.round(r_target / per_contract_risk_usd), 1, 15))
-        return contracts
+        per_contract_sl_risk = (sl_dist_pts * self.config.MNQ_POINT_VALUE) + 4.48
+        max_safe_contracts = int(np.max([1, np.floor((1.35 * r_target) / per_contract_sl_risk)]))
+
+        contracts = min(base_contracts, max_safe_contracts)
+        return int(np.clip(contracts, 1, 12))
 
     def update_intraday_pnl(self, delta_pnl: float) -> Tuple[bool, Optional[str]]:
         """

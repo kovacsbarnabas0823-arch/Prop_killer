@@ -150,6 +150,7 @@ class SessionDataPreprocessor:
 
         # 14-day Wilder / SMA ATR, shifted by 1 day so today's session only uses prior 14 days
         daily_atr = tr.rolling(window=14).mean().shift(1)
+        daily_atr_sma20 = daily_atr.rolling(window=20).mean().shift(1)
 
         prev_high = daily_bars["High"].shift(1)
         prev_low = daily_bars["Low"].shift(1)
@@ -158,6 +159,7 @@ class SessionDataPreprocessor:
         prev2_low = daily_bars["Low"].shift(2)
 
         self.daily_atr_map = daily_atr.to_dict()
+        self.daily_atr_sma20_map = daily_atr_sma20.to_dict()
         self.prev_day_close_map = prev_close.to_dict()
         self.prev_day_high_map = prev_high.to_dict()
         self.prev_day_low_map = prev_low.to_dict()
@@ -168,10 +170,10 @@ class SessionDataPreprocessor:
         logger.info("Pre-grouping sessions into daily lookup table...")
         self.daily_dict = {d: group for d, group in df.groupby(df.index.date)}
 
-        logger.info("Precomputing Zarattini-Baltussen time-of-day noise envelopes (Multi-Horizon 10:00-14:00)...")
+        logger.info("Precomputing Zarattini-Baltussen time-of-day noise envelopes (10:30-13:30 NY)...")
         checkpoints = [
-            "10:00", "10:15", "10:30", "10:45", "11:00", "11:15", "11:30", "11:45",
-            "12:00", "12:15", "12:30", "12:45", "13:00", "13:15", "13:30", "13:45", "14:00"
+            "10:30", "10:45", "11:00", "11:15", "11:30", "11:45",
+            "12:00", "12:15", "12:30", "12:45", "13:00", "13:15", "13:30"
         ]
         dates_list = sorted(list(self.daily_dict.keys()))
 
@@ -188,7 +190,8 @@ class SessionDataPreprocessor:
             sigma_cp = df_cp["move"].rolling(window=14).mean().shift(1)
             moves_by_cp[cp] = sigma_cp.to_dict()
 
-        # Build noise_band_map with Regime-Adaptive Multiplier (Kd)
+        # Build noise_band_map with institutional Kd = 1.25 multiplier (removing false-breakout Kd=1.12)
+        kd = 1.25
         for d in dates_list:
             if d not in self.prev_day_close_map or pd.isna(self.prev_day_close_map[d]):
                 continue
@@ -202,21 +205,6 @@ class SessionDataPreprocessor:
             d_open = float(rth_sub.iloc[0]["Open"])
             ref_high = max(d_open, p_close)
             ref_low = min(d_open, p_close)
-
-            # Compute prior day's RTH range ratio (comp_ratio = PriorDay_RTH_Range / ATR_14)
-            prev_rng = self.prev_day_range_map.get(d)
-            atr_val = self.daily_atr_map.get(d)
-            if prev_rng is not None and not pd.isna(prev_rng) and atr_val is not None and not pd.isna(atr_val) and atr_val > 0:
-                comp_ratio = prev_rng / atr_val
-            else:
-                comp_ratio = 1.0
-
-            if comp_ratio <= 0.85:
-                kd = 1.12
-            elif comp_ratio <= 1.20:
-                kd = 1.25
-            else:
-                kd = 1.35
 
             self.noise_band_map[d] = {}
             for cp in checkpoints:

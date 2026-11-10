@@ -177,6 +177,20 @@ class PessimisticExecutionSimulator:
                     is_be_activated = True
                     current_sl = be_price
 
+            # 3b. Maróy (2025, SSRN 5095349) Non-Dilutive High-Water-Mark Ratchet Floor
+            if signal.ratchet_tiers:
+                for req_r, lock_r in signal.ratchet_tiers:
+                    if direction == 1:
+                        if bar_high - entry_price >= req_r * signal.sl_dist:
+                            ratchet_price = entry_price + (lock_r * signal.sl_dist)
+                            if ratchet_price > current_sl:
+                                current_sl = ratchet_price
+                    else:
+                        if entry_price - bar_low >= req_r * signal.sl_dist:
+                            ratchet_price = entry_price - (lock_r * signal.sl_dist)
+                            if ratchet_price < current_sl:
+                                current_sl = ratchet_price
+
             # 4. Dynamic Trailing Indicator Exit Check (Evaluated on confirmed 5-minute candle close)
             # Engage trailing once activation threshold is reached (e.g. is_be_activated or immediate)
             trail_active = is_be_activated or (signal.trail_activation_r <= 0.0)
@@ -187,8 +201,12 @@ class PessimisticExecutionSimulator:
                     if signal.trail_rule == "VWAP_BAND" and trail_upper_vals is not None and trail_lower_vals is not None:
                         u_band = trail_upper_vals[i]
                         l_band = trail_lower_vals[i]
+                        band_mode = getattr(signal, "trail_band_mode", "WIDE")
                         if direction == 1:
-                            threshold = min(u_band, val) if not np.isnan(u_band) else val
+                            if band_mode == "TIGHT":  # Zarattini (2024, p.10) tightened trail: max(UB, VWAP)
+                                threshold = max(u_band, val) if not np.isnan(u_band) else val
+                            else:  # WIDE trail: min(UB, VWAP)
+                                threshold = min(u_band, val) if not np.isnan(u_band) else val
                             if bar_close < threshold:
                                 exit_price = bar_close - self.slippage_points
                                 rem_qty = qty_runner if (scale_out_mode and tp1_hit) else contract_qty
@@ -198,7 +216,10 @@ class PessimisticExecutionSimulator:
                                 ))
                                 return completed_trades
                         else:
-                            threshold = max(l_band, val) if not np.isnan(l_band) else val
+                            if band_mode == "TIGHT":  # Zarattini (2024, p.10) tightened trail: min(LB, VWAP)
+                                threshold = min(l_band, val) if not np.isnan(l_band) else val
+                            else:  # WIDE trail: max(LB, VWAP)
+                                threshold = max(l_band, val) if not np.isnan(l_band) else val
                             if bar_close > threshold:
                                 exit_price = bar_close + self.slippage_points
                                 rem_qty = qty_runner if (scale_out_mode and tp1_hit) else contract_qty

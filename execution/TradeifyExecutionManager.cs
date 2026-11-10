@@ -165,10 +165,14 @@ namespace NinjaTrader.NinjaScript.Strategies
         }
 
         /// <summary>
-        /// Calculates optimal MNQ contract count via Decoupled Two-Regime Volatility-Normalized Stochastic Position Controller.
-        /// Formula: contracts = clip(round(R_target / ((slDistPts * 2.0) + 4.48)), 1, 15)
+        /// Calculates optimal MNQ contract count via Secular ATR_14 Volatility Normalization + Pre-Lock Safe-Harbor Protocol.
+        /// Formula:
+        ///   refVolPts = (atr14 > 0) ? (0.22 * atr14) : Math.Max(slDistPts, 30.0);
+        ///   baseContracts = clip(round(rTarget / ((refVolPts * 2.0) + 4.48)), 1, 12);
+        ///   maxSafeContracts = floor((1.35 * rTarget) / ((slDistPts * 2.0) + 4.48));
+        ///   contracts = min(baseContracts, maxSafeContracts);
         /// </summary>
-        public int CalculateOptimalMNQSize(double currentCash, double slDistPts = 30.0)
+        public int CalculateOptimalMNQSize(double currentCash, double slDistPts = 30.0, double atr14 = 0.0)
         {
             double buffer = currentCash - activeFloor;
             double profit = currentCash - StartingBalance;
@@ -176,7 +180,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 
             if (!IsFundedAccount)
             {
-                // Regime 1: EVALUATION Phase (0% Consistency Rule)
+                // Regime 1: EVALUATION Phase (0% Consistency Rule - Maximize First-Passage Velocity)
                 if (currentCash >= 51900.0)
                     rTarget = 440.0; // Tier 3: Lock-Zone Sprint
                 else if (profit >= 700.0 && buffer >= 1300.0)
@@ -188,26 +192,34 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
             else
             {
-                // Regime 2: FUNDED Phase (35% Consistency Rule, $920 Cap, $52,650 Target)
-                if (buffer < 1100.0)
-                    rTarget = 105.0; // Drawdown Shield
-                else if (!isFloorLocked && eodHighWatermark < 52100.0)
-                    rTarget = 150.0; // Pre-Lock Trailing Zone
+                // Regime 2: FUNDED Phase (Pre-Lock vs Post-Lock Two-Zone Escalation, $920 Cap)
+                if (!isFloorLocked && eodHighWatermark < 52100.0)
+                {
+                    // Zone 1: Trailing Danger Zone (EOD_HWM < $52,100)
+                    rTarget = (buffer < 1100.0) ? 100.0 : 135.0;
+                }
                 else
-                    rTarget = 215.0; // Post-Lock Static Zone
+                {
+                    // Zone 2: Static Locked Zone ($50,100 Locked Floor)
+                    rTarget = 230.0;
+                }
             }
 
-            double perContractRisk = (slDistPts * 2.00) + 4.48; // $2/pt + $2.48 comm + $2.00 slippage
-            if (perContractRisk <= 0) return 2;
+            double refVolPts = (atr14 > 0.0) ? (0.22 * atr14) : Math.Max(slDistPts, 30.0);
+            double unitVolRisk = (refVolPts * 2.00) + 4.48;
+            int baseContracts = (int)Math.Round(rTarget / unitVolRisk);
 
-            int contracts = (int)Math.Round(rTarget / perContractRisk);
-            return Math.Max(1, Math.Min(15, contracts));
+            double perContractSlRisk = (slDistPts * 2.00) + 4.48;
+            int maxSafeContracts = (int)Math.Max(1, Math.Floor((1.35 * rTarget) / perContractSlRisk));
+
+            int contracts = Math.Min(baseContracts, maxSafeContracts);
+            return Math.Max(1, Math.Min(12, contracts));
         }
 
         /// <summary>
         /// External signal entry point invoked by Webhook or Signal Module.
         /// </summary>
-        public void SubmitSignalEntry(bool isLong, double stopLossPrice, double targetPrice1)
+        public void SubmitSignalEntry(bool isLong, double stopLossPrice, double targetPrice1, double atr14 = 0.0, string strategyId = "")
         {
             if (isDailyHalted)
             {
@@ -221,12 +233,23 @@ namespace NinjaTrader.NinjaScript.Strategies
                 return;
             }
 
+            // Rule A: Qualification Day Lock-In in Funded Pre-Lock Zone
+            if (IsFundedAccount && !isFloorLocked && eodHighWatermark < 52100.0 && strategyId == "H4")
+            {
+                double dayRealized = currentSessionRealizedPnL;
+                if (dayRealized >= 220.0)
+                {
+                    Print(string.Format("[OEM SKIPPED] Qualification Day Lock-In: Day realized ${0:F2} >= $220 in Pre-Lock zone. Preserving qualifying day.", dayRealized));
+                    return;
+                }
+            }
+
             double currentCash = Account.Get(AccountItem.CashValue, Currency.UsDollar);
             double currentPrice = Close[0];
             double slDistPts = Math.Abs(currentPrice - stopLossPrice);
             if (slDistPts <= 0) slDistPts = 30.0;
 
-            int contracts = CalculateOptimalMNQSize(currentCash, slDistPts);
+            int contracts = CalculateOptimalMNQSize(currentCash, slDistPts, atr14);
             if (contracts <= 0) return;
 
             OrderAction action = isLong ? OrderAction.Buy : OrderAction.SellShort;

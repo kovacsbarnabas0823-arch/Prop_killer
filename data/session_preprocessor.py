@@ -170,10 +170,11 @@ class SessionDataPreprocessor:
         logger.info("Pre-grouping sessions into daily lookup table...")
         self.daily_dict = {d: group for d, group in df.groupby(df.index.date)}
 
-        logger.info("Precomputing Zarattini-Baltussen time-of-day noise envelopes (10:30-13:30 NY)...")
+        logger.info("Precomputing Zarattini-Baltussen time-of-day noise envelopes (10:30-14:00 NY)...")
         checkpoints = [
             "10:30", "10:45", "11:00", "11:15", "11:30", "11:45",
-            "12:00", "12:15", "12:30", "12:45", "13:00", "13:15", "13:30"
+            "12:00", "12:15", "12:30", "12:45", "13:00", "13:15", "13:30",
+            "13:45", "14:00"
         ]
         dates_list = sorted(list(self.daily_dict.keys()))
 

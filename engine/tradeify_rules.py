@@ -48,6 +48,20 @@ class TradeifyAccountConfig:
     SLIPPAGE_POINTS_PER_FILL: float = 0.50       # 0.50 NQ/MNQ points per market execution
 
 
+def get_strategy_unit_risk_usd(strategy_id: str, atr_14: float) -> float:
+    """
+    Computes bounded, strategy-specific risk denominator in USD per MNQ contract.
+    H3: Stop distance [22, 48] pts -> ref_pts clipped to [30, 40] pts ($64.48 - $84.48/MNQ).
+    H4: Stop distance [16, 32] pts -> ref_pts clipped to [16, 22] pts ($36.48 - $48.48/MNQ).
+    """
+    if strategy_id == "H4":
+        ref_pts_h4 = float(np.clip(0.09 * atr_14, 16.0, 22.0))
+        return (ref_pts_h4 * 2.00) + 4.48
+    else:  # H3
+        ref_pts_h3 = float(np.clip(0.18 * atr_14, 30.0, 40.0))
+        return (ref_pts_h3 * 2.00) + 4.48
+
+
 class TradeifyAccountState:
     """
     Mathematical state machine modeling the Tradeify $50K Growth account.
@@ -103,15 +117,19 @@ class TradeifyAccountState:
         self.is_governor_halted = False
         self.total_trading_days += 1
 
-    def get_optimal_mnq_size(self, sl_dist_pts: float = 30.0, atr_14: Optional[float] = None) -> int:
+    def get_optimal_mnq_size(
+        self,
+        strategy_id: str = "H3",
+        sl_dist_pts: float = 30.0,
+        atr_14: Optional[float] = None,
+        morning_pnl: float = 0.0
+    ) -> int:
         """
-        Zarattini (2024) ATR_14 Volatility Normalization + Pre-Lock Safe-Harbor Protocol.
-        Calculates optimal MNQ contract count:
-            ref_vol_pts = 0.22 * atr_14 if (atr_14 and atr_14 > 0) else max(sl_dist_pts, 30.0)
-            unit_vol_risk_usd = (ref_vol_pts * 2.00) + 4.48
-            base_contracts = int(np.clip(np.round(r_target / unit_vol_risk_usd), 1, 12))
-            max_safe_contracts = int(np.max([1, np.floor((1.35 * r_target) / ((sl_dist_pts * 2.00) + 4.48))]))
-            contracts = min(base_contracts, max_safe_contracts)
+        Phase 5 Bounded Risk-Parity Sizer with House-Money Floor Guard.
+        - Strategy-specific bounded risk denominator prevents ATR starvation in 2024-2026.
+        - Two-regime tiers: Evaluation Sprint vs Funded Capital Preservation.
+        - House-Money Floor Guard for H4: If morning PnL >= +$165, size H4 from surplus (morning_pnl - $160),
+          guaranteeing net day PnL >= +$160 even on full stop-out (preserving qualifying days).
         """
         if self.is_breached or self.is_daily_stopped or self.is_governor_halted:
             return 0
@@ -119,40 +137,44 @@ class TradeifyAccountState:
         buffer = self.usable_buffer
         profit = self.net_profit
         current_equity = self.current_equity
+        atr = atr_14 if (atr_14 is not None and atr_14 > 0) else 200.0
 
         if self.phase == AccountPhase.EVALUATION:
-            # Regime 1: EVALUATION Phase (0% Consistency Rule - Maximize First-Passage Velocity)
+            # Regime 1: Evaluation Sprint Tiers
             if current_equity >= 51900.0:
-                r_target = 440.0   # Tier 3: Lock-Zone Sprint
-            elif profit >= 700.0 and buffer >= 1300.0:
-                r_target = 320.0   # Tier 2: Mid-Buffer Sprint
-            elif buffer >= 850.0:
-                r_target = 225.0   # Tier 1: Base Accumulation
+                r_target, min_c, max_c = 330.0, 4, 8
+            elif profit >= 800.0 and buffer >= 1350.0:
+                r_target, min_c, max_c = 250.0, 3, 6
+            elif buffer >= 950.0:
+                r_target, min_c, max_c = 170.0, 2, 4
             else:
-                r_target = 140.0   # Tier 0: Survival Shield (buffer < $850)
-        elif self.phase == AccountPhase.FUNDED:
-            # Regime 2: FUNDED Phase (Pre-Lock vs Post-Lock Two-Zone Escalation, $920 cap)
-            if not self.is_floor_locked and self.eod_hwm < self.config.FLOOR_LOCK_TRIGGER:
-                # Zone 1: Trailing Danger Zone (EOD_HWM < $52,100)
-                if buffer < 1100.0:
-                    r_target = 100.0   # Survival Shield
-                else:
-                    r_target = 135.0   # Conservative Trailing Target
-            else:
-                # Zone 2: Static Locked Zone (EOD_HWM >= $52,100, Floor Locked at $50,100)
-                r_target = 230.0       # Sprint to $52,650 payout
+                r_target, min_c, max_c = 120.0, 1, 2
         else:
-            r_target = 150.0
+            # Regime 2: Funded Capital Preservation Tiers
+            if buffer < 1050.0:
+                r_target, min_c, max_c = 90.0, 1, 2
+            elif not self.is_floor_locked and self.eod_hwm < self.config.FLOOR_LOCK_TRIGGER:
+                r_target, min_c, max_c = 165.0, 2, 4
+            else:
+                r_target, min_c, max_c = 245.0, 3, 6
 
-        ref_vol_pts = 0.22 * atr_14 if (atr_14 is not None and atr_14 > 0) else max(sl_dist_pts, 30.0)
-        unit_vol_risk_usd = (ref_vol_pts * self.config.MNQ_POINT_VALUE) + 4.48
-        base_contracts = int(np.clip(np.round(r_target / unit_vol_risk_usd), 1, 12))
+            # House-Money Floor Guard for H4 in Funded Pre-Lock Mode
+            if strategy_id == "H4" and not self.is_floor_locked and self.eod_hwm < self.config.FLOOR_LOCK_TRIGGER:
+                if morning_pnl >= 165.0:
+                    house_money_budget = morning_pnl - 160.0
+                    r_effective = min(r_target, house_money_budget)
+                    per_c_risk = (sl_dist_pts * self.config.MNQ_POINT_VALUE) + 4.48
+                    h4_contracts = int(np.floor(r_effective / per_c_risk))
+                    return max(0, min(max_c, h4_contracts))
+
+        unit_risk_usd = get_strategy_unit_risk_usd(strategy_id, atr)
+        raw_contracts = int(np.round(r_target / unit_risk_usd))
 
         per_contract_sl_risk = (sl_dist_pts * self.config.MNQ_POINT_VALUE) + 4.48
         max_safe_contracts = int(np.max([1, np.floor((1.35 * r_target) / per_contract_sl_risk)]))
 
-        contracts = min(base_contracts, max_safe_contracts)
-        return int(np.clip(contracts, 1, 12))
+        contracts = int(np.clip(min(raw_contracts, max_safe_contracts), min_c, max_c))
+        return contracts
 
     def update_intraday_pnl(self, delta_pnl: float) -> Tuple[bool, Optional[str]]:
         """

@@ -165,61 +165,92 @@ namespace NinjaTrader.NinjaScript.Strategies
         }
 
         /// <summary>
-        /// Calculates optimal MNQ contract count via Secular ATR_14 Volatility Normalization + Pre-Lock Safe-Harbor Protocol.
+        /// Calculates optimal MNQ contract count via Phase 5 Bounded Risk-Parity Sizer + House-Money Floor Guard.
         /// Formula:
-        ///   refVolPts = (atr14 > 0) ? (0.22 * atr14) : Math.Max(slDistPts, 30.0);
-        ///   baseContracts = clip(round(rTarget / ((refVolPts * 2.0) + 4.48)), 1, 12);
-        ///   maxSafeContracts = floor((1.35 * rTarget) / ((slDistPts * 2.0) + 4.48));
-        ///   contracts = min(baseContracts, maxSafeContracts);
+        ///   refPts = (strategyId == "H4") ? Math.Max(16.0, Math.Min(22.0, 0.09 * atr14))
+        ///                                 : Math.Max(30.0, Math.Min(40.0, 0.18 * atr14));
+        ///   unitRiskUsd = (refPts * 2.00) + 4.48;
+        ///   rawContracts = round(rTarget / unitRiskUsd);
+        ///   maxSafeContracts = floor((1.35 * rTarget) / ((slDistPts * 2.00) + 4.48));
+        ///   contracts = clip(min(rawContracts, maxSafeContracts), minC, maxC);
         /// </summary>
-        public int CalculateOptimalMNQSize(double currentCash, double slDistPts = 30.0, double atr14 = 0.0)
+        public int CalculateOptimalMNQSize(double currentCash, double slDistPts = 30.0, double atr14 = 0.0, string strategyId = "H3", double morningPnL = 0.0)
         {
             double buffer = currentCash - activeFloor;
             double profit = currentCash - StartingBalance;
             double rTarget = 150.0;
+            int minC = 1;
+            int maxC = 12;
 
             if (!IsFundedAccount)
             {
-                // Regime 1: EVALUATION Phase (0% Consistency Rule - Maximize First-Passage Velocity)
+                // Regime 1: EVALUATION Sprint Tiers
                 if (currentCash >= 51900.0)
-                    rTarget = 440.0; // Tier 3: Lock-Zone Sprint
-                else if (profit >= 700.0 && buffer >= 1300.0)
-                    rTarget = 320.0; // Tier 2: Mid-Buffer Sprint
-                else if (buffer >= 850.0)
-                    rTarget = 225.0; // Tier 1: Base Accumulation
+                {
+                    rTarget = 330.0; minC = 4; maxC = 8;
+                }
+                else if (profit >= 800.0 && buffer >= 1350.0)
+                {
+                    rTarget = 250.0; minC = 3; maxC = 6;
+                }
+                else if (buffer >= 950.0)
+                {
+                    rTarget = 170.0; minC = 2; maxC = 4;
+                }
                 else
-                    rTarget = 140.0; // Tier 0: Survival Shield
+                {
+                    rTarget = 120.0; minC = 1; maxC = 2;
+                }
             }
             else
             {
-                // Regime 2: FUNDED Phase (Pre-Lock vs Post-Lock Two-Zone Escalation, $920 Cap)
-                if (!isFloorLocked && eodHighWatermark < 52100.0)
+                // Regime 2: FUNDED Capital Preservation Tiers
+                if (buffer < 1050.0)
                 {
-                    // Zone 1: Trailing Danger Zone (EOD_HWM < $52,100)
-                    rTarget = (buffer < 1100.0) ? 100.0 : 135.0;
+                    rTarget = 90.0; minC = 1; maxC = 2;
+                }
+                else if (!isFloorLocked && eodHighWatermark < 52100.0)
+                {
+                    rTarget = 165.0; minC = 2; maxC = 4;
                 }
                 else
                 {
-                    // Zone 2: Static Locked Zone ($50,100 Locked Floor)
-                    rTarget = 230.0;
+                    rTarget = 245.0; minC = 3; maxC = 6;
+                }
+
+                // House-Money Floor Guard for H4 in Funded Pre-Lock Mode
+                if (strategyId == "H4" && !isFloorLocked && eodHighWatermark < 52100.0)
+                {
+                    if (morningPnL >= 165.0)
+                    {
+                        double houseMoneyBudget = morningPnL - 160.0;
+                        double rEffective = Math.Min(rTarget, houseMoneyBudget);
+                        double perContractRisk = (slDistPts * 2.00) + 4.48;
+                        int h4Contracts = (int)Math.Floor(rEffective / perContractRisk);
+                        return Math.Max(0, Math.Min(maxC, h4Contracts));
+                    }
                 }
             }
 
-            double refVolPts = (atr14 > 0.0) ? (0.22 * atr14) : Math.Max(slDistPts, 30.0);
-            double unitVolRisk = (refVolPts * 2.00) + 4.48;
-            int baseContracts = (int)Math.Round(rTarget / unitVolRisk);
+            double effAtr = (atr14 > 0.0) ? atr14 : 200.0;
+            double refPts = (strategyId == "H4")
+                ? Math.Max(16.0, Math.Min(22.0, 0.09 * effAtr))
+                : Math.Max(30.0, Math.Min(40.0, 0.18 * effAtr));
+
+            double unitRiskUsd = (refPts * 2.00) + 4.48;
+            int rawContracts = (int)Math.Round(rTarget / unitRiskUsd);
 
             double perContractSlRisk = (slDistPts * 2.00) + 4.48;
             int maxSafeContracts = (int)Math.Max(1, Math.Floor((1.35 * rTarget) / perContractSlRisk));
 
-            int contracts = Math.Min(baseContracts, maxSafeContracts);
-            return Math.Max(1, Math.Min(12, contracts));
+            int contracts = Math.Min(rawContracts, maxSafeContracts);
+            return Math.Max(minC, Math.Min(maxC, contracts));
         }
 
         /// <summary>
         /// External signal entry point invoked by Webhook or Signal Module.
         /// </summary>
-        public void SubmitSignalEntry(bool isLong, double stopLossPrice, double targetPrice1, double atr14 = 0.0, string strategyId = "")
+        public void SubmitSignalEntry(bool isLong, double stopLossPrice, double targetPrice1, double atr14 = 0.0, string strategyId = "H3")
         {
             if (isDailyHalted)
             {
@@ -233,24 +264,19 @@ namespace NinjaTrader.NinjaScript.Strategies
                 return;
             }
 
-            // Rule A: Qualification Day Lock-In in Funded Pre-Lock Zone
-            if (IsFundedAccount && !isFloorLocked && eodHighWatermark < 52100.0 && strategyId == "H4")
-            {
-                double dayRealized = currentSessionRealizedPnL;
-                if (dayRealized >= 220.0)
-                {
-                    Print(string.Format("[OEM SKIPPED] Qualification Day Lock-In: Day realized ${0:F2} >= $220 in Pre-Lock zone. Preserving qualifying day.", dayRealized));
-                    return;
-                }
-            }
-
             double currentCash = Account.Get(AccountItem.CashValue, Currency.UsDollar);
             double currentPrice = Close[0];
             double slDistPts = Math.Abs(currentPrice - stopLossPrice);
             if (slDistPts <= 0) slDistPts = 30.0;
 
-            int contracts = CalculateOptimalMNQSize(currentCash, slDistPts, atr14);
-            if (contracts <= 0) return;
+            double currentDailyRealizedPnL = Account.Get(AccountItem.RealizedProfitLoss, Currency.UsDollar) - sessionStartRealizedPnL;
+
+            int contracts = CalculateOptimalMNQSize(currentCash, slDistPts, atr14, strategyId, currentDailyRealizedPnL);
+            if (contracts <= 0)
+            {
+                Print(string.Format("[OEM SKIPPED] Strategy {0} allocated 0 contracts (House-Money Floor Guard or risk buffer).", strategyId));
+                return;
+            }
 
             OrderAction action = isLong ? OrderAction.Buy : OrderAction.SellShort;
             string signalName = isLong ? "MNQ_LONG_ENTRY" : "MNQ_SHORT_ENTRY";
@@ -258,8 +284,8 @@ namespace NinjaTrader.NinjaScript.Strategies
             lastEntryTime = DateTime.UtcNow;
             entryOrder = SubmitOrderUnmanaged(0, action, OrderType.Market, contracts, 0, 0, "", signalName);
 
-            Print(string.Format("[OEM EXECUTED] {0} {1} MNQ contracts (SL Dist: {2:F2} pts). Cash: ${3:F2} | Floor: ${4:F2}",
-                action, contracts, slDistPts, currentCash, activeFloor));
+            Print(string.Format("[OEM EXECUTED] {0} {1} MNQ contracts (SL Dist: {2:F2} pts, Strat: {3}). Cash: ${4:F2} | Floor: ${5:F2}",
+                action, contracts, slDistPts, strategyId, currentCash, activeFloor));
         }
 
         protected override void OnExecutionUpdate(Execution execution, string executionId, double price, int quantity,

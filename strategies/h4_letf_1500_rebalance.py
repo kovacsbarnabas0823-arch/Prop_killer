@@ -38,10 +38,10 @@ logger = logging.getLogger("H4_LETF_Rebalance")
 class H4LETF1500Rebalance(BaseStrategy):
     def __init__(
         self,
-        rod_thresh: float = 0.0085,
-        atr_move_thresh: float = 0.70,
-        range_pos_long: float = 0.80,
-        range_pos_short: float = 0.20,
+        rod_thresh: float = 0.0075,
+        atr_move_thresh: float = 0.60,
+        range_pos_long: float = 0.78,
+        range_pos_short: float = 0.22,
         pin_strike_dist_max: float = 8.0,
         pin_range_max: float = 15.0,
         min_sl_dist: float = 16.0,

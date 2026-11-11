@@ -110,6 +110,7 @@ class PortfolioOrchestrator:
         # 2. Sequential execution loop with risk controls
         last_exit_time = pd.Timestamp.min.tz_localize(df_session_1m.index.tz)
         last_exit_reason: Optional[str] = None
+        morning_trade_pnl = 0.0
 
         for sig in signals:
             if sig.execution_time < last_exit_time:
@@ -123,24 +124,14 @@ class PortfolioOrchestrator:
             if self.account.is_breached or self.account.is_daily_stopped or self.account.is_governor_halted:
                 break
 
-            # Rule A: Pre-Lock Safe-Harbor Protocol (Rodosthenous & Zhang Optimal Stopping)
-            if sig.strategy_id == "H4" and self.account.phase == AccountPhase.FUNDED:
-                if self.account.intraday_pnl >= 220.0 and not self.account.is_floor_locked and self.account.eod_hwm < 52100.0:
-                    logger.debug(f"H4 skipped: Qualification Day Lock-In active (${self.account.intraday_pnl:.2f} >= $220 in Pre-Lock zone).")
-                    continue
-
-            optimal_qty = self.account.get_optimal_mnq_size(sl_dist_pts=sig.sl_dist, atr_14=daily_atr)
+            optimal_qty = self.account.get_optimal_mnq_size(
+                strategy_id=sig.strategy_id,
+                sl_dist_pts=sig.sl_dist,
+                atr_14=daily_atr,
+                morning_pnl=morning_trade_pnl
+            )
             if optimal_qty <= 0:
-                break
-
-            # H4 Intraday Profit Protection
-            if sig.strategy_id == "H4" and self.account.intraday_pnl >= 400.0:
-                max_risk_allowed = 0.25 * self.account.intraday_pnl
-                risk_per_contract = sig.sl_dist * 2.0
-                capped_qty = int(max_risk_allowed / risk_per_contract)
-                if capped_qty < 2:
-                    continue
-                optimal_qty = min(optimal_qty, capped_qty)
+                continue
 
             # Execute trade through pessimistic simulator
             trades = self.sim.simulate_trade(
@@ -156,6 +147,9 @@ class PortfolioOrchestrator:
             trade_net_pnl = sum(t.net_pnl for t in trades)
             last_exit_time = max(t.exit_time for t in trades)
             last_exit_reason = trades[-1].exit_reason
+
+            if sig.strategy_id == "H3":
+                morning_trade_pnl += trade_net_pnl
 
             can_continue, halt_reason = self.account.update_intraday_pnl(trade_net_pnl)
             self.account.close_trade(trade_net_pnl)

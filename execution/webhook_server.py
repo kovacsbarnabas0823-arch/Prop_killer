@@ -92,11 +92,19 @@ async def receive_alpha_signal(request: Request):
     strategy_id = payload.get("strategy_id", "UNKNOWN")
     symbol = payload.get("symbol", "MNQ")
 
-    # Rule A: Pre-Lock Safe-Harbor Protocol (Rodosthenous & Zhang Optimal Stopping)
+    # Step 2: House-Money Floor Guard for H4 in Funded Pre-Lock Mode
     if system_state["is_funded"] and system_state["current_balance"] < 52100.0 and strategy_id == "H4":
-        if system_state["intraday_pnl"] >= 220.0:
-            logger.info(f"Signal H4 skipped: Qualification Day Lock-In active (${system_state['intraday_pnl']:.2f} >= $220 in Pre-Lock zone).")
-            return {"status": "skipped", "reason": "Qualification Day Lock-In active"}
+        if system_state["intraday_pnl"] >= 165.0:
+            house_money_budget = system_state["intraday_pnl"] - 160.0
+            per_c_risk = (abs(float(payload.get("entry_price", 0.0)) - float(payload.get("sl_price", 0.0))) * 2.00) + 4.48
+            if per_c_risk <= 0:
+                per_c_risk = 50.0
+            max_h4_c = int(house_money_budget // per_c_risk)
+            if max_h4_c <= 0:
+                logger.info(f"Signal H4 skipped: House-Money budget (${house_money_budget:.2f}) insufficient to risk 1 MNQ without jeopardizing +$160 qualification floor.")
+                return {"status": "skipped", "reason": "House-Money budget insufficient to protect +$160 floor"}
+            contracts = min(payload.get("contracts", 2), max_h4_c)
+            payload["contracts"] = contracts
 
     # Strict Micro contract enforcement
     if "MNQ" not in symbol:

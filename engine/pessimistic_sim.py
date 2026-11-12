@@ -94,8 +94,6 @@ class PessimisticExecutionSimulator:
 
         # Phase 7: Intraday Absorbing Upper-Barrier Auto-Liquidation ("Pass-on-Touch / Payout-on-Touch")
         tp_account_cap: Optional[float] = None
-        is_qual_ratchet_active: bool = False
-        ratchet_stop: Optional[float] = None
 
         phase_str = str(account_phase).upper() if account_phase is not None else ""
         if "EVALUATION" in phase_str:
@@ -222,30 +220,6 @@ class PessimisticExecutionSimulator:
                             if ratchet_price < current_sl:
                                 current_sl = ratchet_price
 
-            # 3c. Phase 7 Step 2: Funded Qualifying-Day Ratchet (+$260 MFE -> +$160 Floor)
-            # Only active when account still needs qualifying days (< 5) and today hasn't yet qualified (< $150)
-            if "FUNDED" in phase_str and (qualifying_days < 5) and (intraday_realized_pnl < 150.0):
-                if direction == 1:
-                    bar_net_pnl = (bar_close - entry_price) * self.point_value * contract_qty - (self.commission_per_contract_rt * contract_qty)
-                else:
-                    bar_net_pnl = (entry_price - bar_close) * self.point_value * contract_qty - (self.commission_per_contract_rt * contract_qty)
-
-                if bar_net_pnl >= 260.0:
-                    target_trade_pnl = 160.00 - intraday_realized_pnl
-                    comm_tot = self.commission_per_contract_rt * contract_qty
-                    pts_needed = (target_trade_pnl + comm_tot) / (self.point_value * contract_qty)
-                    if direction == 1:
-                        cand_stop = entry_price + pts_needed + self.slippage_points
-                        if cand_stop > current_sl:
-                            current_sl = cand_stop
-                            ratchet_stop = cand_stop
-                            is_qual_ratchet_active = True
-                    else:
-                        cand_stop = entry_price - pts_needed - self.slippage_points
-                        if cand_stop < current_sl:
-                            current_sl = cand_stop
-                            ratchet_stop = cand_stop
-                            is_qual_ratchet_active = True
 
             # 4. Dynamic Trailing Indicator Exit Check (Evaluated on confirmed 5-minute candle close)
             # Engage trailing once activation threshold is reached (e.g. is_be_activated or immediate)
@@ -313,10 +287,7 @@ class PessimisticExecutionSimulator:
                 if sl_touched:
                     exit_price = current_sl - self.slippage_points
                     rem_qty = qty_runner if (scale_out_mode and tp1_hit) else contract_qty
-                    if is_qual_ratchet_active and ratchet_stop is not None and current_sl >= ratchet_stop:
-                        reason = "QUAL_RATCHET_SL"
-                    else:
-                        reason = "BE" if is_be_activated else "SL"
+                    reason = "BE" if is_be_activated else "SL"
                     completed_trades.append(self._create_trade(
                         signal, direction, rem_qty, entry_time, entry_price,
                         bar_time, exit_price, reason
@@ -377,10 +348,7 @@ class PessimisticExecutionSimulator:
                 if sl_touched:
                     exit_price = current_sl + self.slippage_points
                     rem_qty = qty_runner if (scale_out_mode and tp1_hit) else contract_qty
-                    if is_qual_ratchet_active and ratchet_stop is not None and current_sl <= ratchet_stop:
-                        reason = "QUAL_RATCHET_SL"
-                    else:
-                        reason = "BE" if is_be_activated else "SL"
+                    reason = "BE" if is_be_activated else "SL"
                     completed_trades.append(self._create_trade(
                         signal, direction, rem_qty, entry_time, entry_price,
                         bar_time, exit_price, reason

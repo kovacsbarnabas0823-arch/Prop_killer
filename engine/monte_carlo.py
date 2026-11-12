@@ -240,135 +240,215 @@ class TradeifyChallengeSimulator:
         daily_pnl_eval: np.ndarray,
         daily_pnl_funded: np.ndarray,
         num_simulations: int = 10000,
-        block_size: int = 5,
-        stagger_days: int = 10,
-        timeline_days: int = 300
+        block_size: int = 5
     ) -> Dict[str, Any]:
         """
-        Simulates 1-Account, 3-Account, and 5-Account Staggered Portfolios over 10,000 iterations.
-        Accounts are staggered by 10 trading days to avoid concurrent drawdown clusters.
-        Evaluates at 180-day and 250-day horizons.
+        Phase 8 Multi-Account Institutional Benchmark & Funded Lifetime Value (LTV) Engine:
+        1. Architecture A: 5-Ticket Sequential / Non-Overlapping Campaign (Independent 250d-Eval + 250d-Funded lifecycles).
+        2. Architecture B: 5-Account Milestone-Gated Parallel Scaling (Tier 2 $50,800 milestone-activated desynchronization).
+        3. Architecture C: Funded Account Lifetime Value (Multi-Payout Compounding across Payouts #1, #2, and #3 on permanent $50,100 locked floor).
         """
         n_days = len(daily_pnl_eval)
-        num_blocks = timeline_days // block_size + 2
         np.random.seed(42)
 
-        configs = [1, 3, 5]
-        payouts_180 = {c: [] for c in configs}
-        payouts_250 = {c: [] for c in configs}
+        def run_single_ticket(eval_pnl_path, fund_pnl_path, max_eval=250, max_fund=250):
+            # Phase 1: Eval
+            e_bal = 50000.0
+            e_hwm = 50000.0
+            e_floor = 48000.0
+            passed = False
+            t_pass = None
 
-        for _ in range(num_simulations):
-            # Sample continuous stream
-            stream_eval = []
-            stream_funded = []
-            for _ in range(num_blocks):
-                idx = np.random.randint(0, max(1, n_days - block_size))
-                stream_eval.extend(daily_pnl_eval[idx : idx + block_size])
-                stream_funded.extend(daily_pnl_funded[idx : idx + block_size])
+            for t, pnl in enumerate(eval_pnl_path[:max_eval]):
+                pnl = max(-600.0, pnl)
+                e_bal += pnl
+                if e_bal > e_hwm:
+                    e_hwm = e_bal
+                e_floor = max(e_floor, e_hwm - 2000.0)
+                if e_bal <= e_floor:
+                    return {"payouts": 0, "eval_passed": False, "t_pass": None, "eval_bal": e_bal}
+                if e_bal >= 53000.0:
+                    passed = True
+                    t_pass = t + 1
+                    break
 
-            s_eval = np.array(stream_eval[:timeline_days])
-            s_funded = np.array(stream_funded[:timeline_days])
+            if not passed:
+                return {"payouts": 0, "eval_passed": False, "t_pass": None, "eval_bal": e_bal}
 
-            # Run 5 accounts
-            acc_payout_days = [None] * 5
+            # Phase 2: Funded Multi-Payout Compounding (Payouts #1, #2, #3)
+            f_bal = 50000.0
+            f_hwm = 50000.0
+            f_floor = 48000.0
+            is_locked = False
+            payouts = 0
+            qual_days = 0
+            target = 52650.0
 
-            for acc_idx in range(5):
-                start_d = acc_idx * stagger_days
-                eval_bal = 50000.0
-                eval_hwm = 50000.0
-                eval_floor = 48000.0
-                passed_day = None
-                breached = False
+            for t, raw_pnl in enumerate(fund_pnl_path):
+                pnl = max(-600.0, min(920.0, raw_pnl))
+                f_bal += pnl
+                if pnl >= 150.0:
+                    qual_days += 1
+                if f_bal > f_hwm:
+                    f_hwm = f_bal
+                if not is_locked:
+                    if f_hwm >= 52100.0:
+                        is_locked = True
+                        f_floor = 50100.0
+                    else:
+                        f_floor = max(f_floor, f_hwm - 2000.0)
 
-                for t in range(start_d, timeline_days):
-                    if (t - start_d) >= self.max_eval_days:
-                        break
-                    pnl = s_eval[t]
-                    if pnl <= -600.0:
-                        pnl = -600.0
-                    eval_bal += pnl
-                    if eval_bal > eval_hwm:
-                        eval_hwm = eval_bal
-                    eval_floor = max(eval_floor, eval_hwm - 2000.0)
-                    if eval_bal <= eval_floor:
-                        breached = True
-                        break
-                    if eval_bal >= self.config.EVAL_PROFIT_TARGET:
-                        passed_day = t + 1
-                        break
+                if f_bal <= f_floor:
+                    break
 
-                if not breached and passed_day is not None:
-                    fund_bal = 50000.0
-                    fund_hwm = 50000.0
-                    fund_floor = 48000.0
-                    is_locked = False
+                if f_bal >= target and qual_days >= 5:
+                    payouts += 1
+                    f_bal -= 1500.0
+                    target = f_bal + 1500.0
                     qual_days = 0
+                    is_locked = True
+                    f_floor = 50100.0
+                    if payouts >= 3 or t >= (max_fund * 3):
+                        break
 
-                    for t in range(passed_day, timeline_days):
-                        if (t - passed_day) >= self.max_funded_days:
-                            break
-                        pnl = min(self.config.MAX_FUNDED_DAILY_PROFIT, s_funded[t])
-                        if pnl <= -600.0:
-                            pnl = -600.0
-                        fund_bal += pnl
-                        if pnl >= self.config.MIN_WINNING_DAY_PROFIT:
-                            qual_days += 1
-                        if fund_bal > fund_hwm:
-                            fund_hwm = fund_bal
-                        if not is_locked:
-                            if fund_hwm >= self.config.FLOOR_LOCK_TRIGGER:
-                                is_locked = True
-                                fund_floor = self.config.LOCKED_FLOOR
+            return {"payouts": payouts, "eval_passed": True, "t_pass": t_pass, "eval_bal": e_bal}
+
+        num_blocks = (250 + 750) // block_size + 2
+
+        # Architecture A collections
+        arch_a_payouts = {1: [], 3: [], 5: []}
+        # Architecture B collections
+        arch_b_payouts = {1: [], 3: [], 5: []}
+        # Architecture C counters
+        c_p1, c_p2, c_p3 = 0, 0, 0
+
+        for sim_i in range(num_simulations):
+            # Architecture A: 5 independent non-overlapping tickets
+            p_a = []
+            for ticket_i in range(5):
+                s_e, s_f = [], []
+                for _ in range(num_blocks):
+                    idx = np.random.randint(0, max(1, n_days - block_size))
+                    s_e.extend(daily_pnl_eval[idx : idx + block_size])
+                    s_f.extend(daily_pnl_funded[idx : idx + block_size])
+                res = run_single_ticket(s_e, s_f)
+                p_a.append(min(1, res["payouts"]))
+                if ticket_i == 0:
+                    if res["payouts"] >= 1: c_p1 += 1
+                    if res["payouts"] >= 2: c_p2 += 1
+                    if res["payouts"] >= 3: c_p3 += 1
+
+            arch_a_payouts[1].append(p_a[0])
+            arch_a_payouts[3].append(sum(p_a[:3]))
+            arch_a_payouts[5].append(sum(p_a))
+
+            # Architecture B: Milestone-Gated Parallel Scaling on a shared timeline
+            s_e_b, s_f_b = [], []
+            for _ in range(300):
+                idx = np.random.randint(0, max(1, n_days - block_size))
+                s_e_b.extend(daily_pnl_eval[idx : idx + block_size])
+                s_f_b.extend(daily_pnl_funded[idx : idx + block_size])
+
+            b_res = [0] * 5
+            curr_t = 0
+            for acc_i in range(5):
+                st = curr_t
+                bal, hwm, flr = 50000.0, 50000.0, 48000.0
+                p_day, m_day = None, None
+                for t in range(st, st + 250):
+                    if t >= len(s_e_b): break
+                    pnl = max(-600.0, s_e_b[t])
+                    bal += pnl
+                    if bal > hwm: hwm = bal
+                    flr = max(flr, hwm - 2000.0)
+                    if bal <= flr:
+                        if m_day is None: curr_t = t + 1
+                        break
+                    if m_day is None and bal >= 50800.0:
+                        m_day = t + 1
+                        curr_t = m_day
+                    if bal >= 53000.0:
+                        p_day = t + 1
+                        if m_day is None: curr_t = p_day
+                        break
+
+                if p_day is not None:
+                    fbal, fhwm, fflr = 50000.0, 50000.0, 48000.0
+                    flck = False
+                    qdays = 0
+                    for t in range(p_day, p_day + 250):
+                        if t >= len(s_f_b): break
+                        pnl = max(-600.0, min(920.0, s_f_b[t]))
+                        fbal += pnl
+                        if pnl >= 150.0: qdays += 1
+                        if fbal > fhwm: fhwm = fbal
+                        if not flck:
+                            if fhwm >= 52100.0:
+                                flck = True
+                                fflr = 50100.0
                             else:
-                                fund_floor = max(fund_floor, fund_hwm - self.config.EOD_TRAILING_DD)
-                        if fund_bal <= fund_floor:
+                                fflr = max(fflr, fhwm - 2000.0)
+                        if fbal <= fflr: break
+                        if fbal >= 52650.0 and qdays >= 5:
+                            b_res[acc_i] = 1
                             break
-                        if fund_bal >= self.config.FUNDED_PAYOUT_TARGET and qual_days >= self.config.MIN_FUNDED_WINNING_DAYS:
-                            acc_payout_days[acc_idx] = t + 1
-                            break
 
-            for c in configs:
-                p_180 = sum(1 for i in range(c) if acc_payout_days[i] is not None and acc_payout_days[i] <= 180)
-                p_250 = sum(1 for i in range(c) if acc_payout_days[i] is not None and acc_payout_days[i] <= 250)
-                payouts_180[c].append(p_180)
-                payouts_250[c].append(p_250)
+            arch_b_payouts[1].append(b_res[0])
+            arch_b_payouts[3].append(sum(b_res[:3]))
+            arch_b_payouts[5].append(sum(b_res))
 
-        results = {}
-        b = 1350.0 / 87.0  # 15.517 payout to ticket fee ratio
-        for c in configs:
-            arr_180 = np.array(payouts_180[c])
-            arr_250 = np.array(payouts_250[c])
+        b = 1350.0 / 87.0
+        results = {"architecture_a": {}, "architecture_b": {}, "architecture_c": {}}
 
-            prob_ge1_180 = float(np.mean(arr_180 >= 1) * 100.0)
-            prob_ge1_250 = float(np.mean(arr_250 >= 1) * 100.0)
-            prob_ge2_180 = float(np.mean(arr_180 >= 2) * 100.0)
-            prob_ge2_250 = float(np.mean(arr_250 >= 2) * 100.0)
-            prob_ge3_180 = float(np.mean(arr_180 >= 3) * 100.0)
-            prob_ge3_250 = float(np.mean(arr_250 >= 3) * 100.0)
-
-            mean_payouts_250 = float(np.mean(arr_250))
-            ticket_cost = c * 87.0
-            expected_gross = mean_payouts_250 * 1350.0
-            expected_net = expected_gross - ticket_cost
-            ret_on_fees = (expected_net / ticket_cost) * 100.0
-
-            p_win = prob_ge1_250 / 100.0
+        for k in [1, 3, 5]:
+            arr_a = np.array(arch_a_payouts[k])
+            p1 = float(np.mean(arr_a >= 1) * 100.0)
+            p2 = float(np.mean(arr_a >= 2) * 100.0)
+            p3 = float(np.mean(arr_a >= 3) * 100.0)
+            mp = float(np.mean(arr_a))
+            cost = k * 87.0
+            net = mp * 1350.0 - cost
+            roi = (net / cost) * 100.0
+            p_win = p1 / 100.0
             kelly = p_win - ((1.0 - p_win) / b)
-
-            results[f"{c}_Accounts"] = {
-                "num_accounts": c,
-                "ticket_cost": ticket_cost,
-                "prob_ge1_180d": prob_ge1_180,
-                "prob_ge1_250d": prob_ge1_250,
-                "prob_ge2_180d": prob_ge2_180,
-                "prob_ge2_250d": prob_ge2_250,
-                "prob_ge3_180d": prob_ge3_180,
-                "prob_ge3_250d": prob_ge3_250,
-                "mean_payouts_250d": mean_payouts_250,
-                "expected_gross_cash": expected_gross,
-                "expected_net_cash": expected_net,
-                "return_on_fees_pct": ret_on_fees,
-                "kelly_fraction": kelly
+            results["architecture_a"][k] = {
+                "num_accounts": k, "ticket_cost": cost, "p_ge1_payout": p1, "p_ge2_payout": p2, "p_ge3_payout": p3,
+                "mean_payouts": mp, "expected_net_cash": net, "return_on_fees_pct": roi, "kelly_fraction": kelly
             }
+
+            arr_b = np.array(arch_b_payouts[k])
+            bp1 = float(np.mean(arr_b >= 1) * 100.0)
+            bp2 = float(np.mean(arr_b >= 2) * 100.0)
+            bp3 = float(np.mean(arr_b >= 3) * 100.0)
+            bmp = float(np.mean(arr_b))
+            bnet = bmp * 1350.0 - cost
+            broi = (bnet / cost) * 100.0
+            bp_win = bp1 / 100.0
+            bkelly = bp_win - ((1.0 - bp_win) / b)
+            results["architecture_b"][k] = {
+                "num_accounts": k, "ticket_cost": cost, "p_ge1_payout": bp1, "p_ge2_payout": bp2, "p_ge3_payout": bp3,
+                "mean_payouts": bmp, "expected_net_cash": bnet, "return_on_fees_pct": broi, "kelly_fraction": bkelly
+            }
+
+            # Backwards compatibility
+            results[f"{k}_Accounts"] = results["architecture_a"][k]
+
+        p1_pct = (c_p1 / num_simulations) * 100.0
+        p2_pct = (c_p2 / num_simulations) * 100.0
+        p3_pct = (c_p3 / num_simulations) * 100.0
+        p2_g_p1 = (c_p2 / max(1, c_p1)) * 100.0
+        p3_g_p2 = (c_p3 / max(1, c_p2)) * 100.0
+        exp_payouts = (c_p1 + c_p2 + c_p3) / num_simulations
+        ltv_net = exp_payouts * 1350.0 - 87.0
+
+        results["architecture_c"] = {
+            "p1_pct": p1_pct,
+            "p2_pct": p2_pct,
+            "p3_pct": p3_pct,
+            "p2_given_p1": p2_g_p1,
+            "p3_given_p2": p3_g_p2,
+            "expected_payouts_per_ticket": exp_payouts,
+            "lifetime_net_ev": ltv_net
+        }
 
         return results

@@ -159,13 +159,13 @@ class TradeifyAccountState:
             if 0.0 < remaining_to_pass < 350.0:
                 r_target = max(155.0, min(r_target, 0.90 * remaining_to_pass))
         else:
-            # Regime 2: Funded Capital Preservation Tiers
+            # Regime 2: Funded Capital Preservation Tiers (Phase 8 Hybrid: Shielded Pre-Lock, Convex Post-Lock)
             if buffer < 1150.0:
                 r_target, min_c, max_c = 75.0, 1, 2
             elif not self.is_floor_locked and self.eod_hwm < self.config.FLOOR_LOCK_TRIGGER:
                 r_target, min_c, max_c = 125.0, 2, 3
             else:
-                r_target, min_c, max_c = 185.0, 2, 4
+                r_target, min_c, max_c = 245.0, 3, 6
 
             # House-Money Floor Guard for H4 in Funded Pre-Lock Mode
             if strategy_id == "H4" and not self.is_floor_locked and self.eod_hwm < self.config.FLOOR_LOCK_TRIGGER:

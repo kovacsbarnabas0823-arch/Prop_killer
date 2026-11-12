@@ -174,36 +174,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 return;
             }
 
-            // 5. Phase 7: Funded Qualifying-Day Ratchet (+$260 MFE -> +$160 Floor)
-            if (IsFundedAccount && Position.MarketPosition != MarketPosition.Flat && currentDailyRealizedPnL < 150.0)
-            {
-                if (currentDailyUnrealizedPnL >= 260.0 && stopLossOrder != null)
-                {
-                    double targetTradePnL = 160.0 - currentDailyRealizedPnL;
-                    double ptsNeeded = (targetTradePnL + (2.48 * Position.Quantity)) / (2.0 * Position.Quantity);
-
-                    if (Position.MarketPosition == MarketPosition.Long)
-                    {
-                        double ratchetStop = Position.AveragePrice + ptsNeeded + 0.50;
-                        if (ratchetStop > stopLossOrder.StopPrice)
-                        {
-                            ChangeOrder(stopLossOrder, Position.Quantity, 0, ratchetStop);
-                            Print(string.Format("[QUAL RATCHET] Stop ratcheted to {0:F2} locking +$160.00 daily floor.", ratchetStop));
-                        }
-                    }
-                    else if (Position.MarketPosition == MarketPosition.Short)
-                    {
-                        double ratchetStop = Position.AveragePrice - ptsNeeded - 0.50;
-                        if (ratchetStop < stopLossOrder.StopPrice)
-                        {
-                            ChangeOrder(stopLossOrder, Position.Quantity, 0, ratchetStop);
-                            Print(string.Format("[QUAL RATCHET] Stop ratcheted to {0:F2} locking +$160.00 daily floor.", ratchetStop));
-                        }
-                    }
-                }
-            }
-
-            // 6. Catastrophic Floor Check
+            // 5. Catastrophic Floor Check
             if (currentCash <= activeFloor)
             {
                 TriggerEmergencyKillSwitch(string.Format("ACCOUNT FLOOR BREACH: Cash ${0:F2} <= Floor ${1:F2}", currentCash, activeFloor));
@@ -257,18 +228,18 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
             else
             {
-                // Regime 2: FUNDED Capital Preservation Tiers (Phase 6 Calibrated)
-                if (buffer < 1150.0)
+                // Regime 2: FUNDED Capital Preservation Tiers (Restored $90 / $165 / $245)
+                if (buffer < 1050.0)
                 {
-                    rTarget = 75.0; minC = 1; maxC = 2;
+                    rTarget = 90.0; minC = 1; maxC = 2;
                 }
                 else if (!isFloorLocked && eodHighWatermark < 52100.0)
                 {
-                    rTarget = 125.0; minC = 2; maxC = 3;
+                    rTarget = 165.0; minC = 2; maxC = 4;
                 }
                 else
                 {
-                    rTarget = 185.0; minC = 2; maxC = 4;
+                    rTarget = 245.0; minC = 3; maxC = 6;
                 }
 
                 // Generalized House-Money Floor Guard for H4 in Funded Pre-Lock Mode

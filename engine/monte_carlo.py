@@ -234,3 +234,141 @@ class TradeifyChallengeSimulator:
             expected_net_value=ev_net,
             total_evaluations=num_simulations
         )
+
+    def simulate_multi_account_portfolio(
+        self,
+        daily_pnl_eval: np.ndarray,
+        daily_pnl_funded: np.ndarray,
+        num_simulations: int = 10000,
+        block_size: int = 5,
+        stagger_days: int = 10,
+        timeline_days: int = 300
+    ) -> Dict[str, Any]:
+        """
+        Simulates 1-Account, 3-Account, and 5-Account Staggered Portfolios over 10,000 iterations.
+        Accounts are staggered by 10 trading days to avoid concurrent drawdown clusters.
+        Evaluates at 180-day and 250-day horizons.
+        """
+        n_days = len(daily_pnl_eval)
+        num_blocks = timeline_days // block_size + 2
+        np.random.seed(42)
+
+        configs = [1, 3, 5]
+        payouts_180 = {c: [] for c in configs}
+        payouts_250 = {c: [] for c in configs}
+
+        for _ in range(num_simulations):
+            # Sample continuous stream
+            stream_eval = []
+            stream_funded = []
+            for _ in range(num_blocks):
+                idx = np.random.randint(0, max(1, n_days - block_size))
+                stream_eval.extend(daily_pnl_eval[idx : idx + block_size])
+                stream_funded.extend(daily_pnl_funded[idx : idx + block_size])
+
+            s_eval = np.array(stream_eval[:timeline_days])
+            s_funded = np.array(stream_funded[:timeline_days])
+
+            # Run 5 accounts
+            acc_payout_days = [None] * 5
+
+            for acc_idx in range(5):
+                start_d = acc_idx * stagger_days
+                eval_bal = 50000.0
+                eval_hwm = 50000.0
+                eval_floor = 48000.0
+                passed_day = None
+                breached = False
+
+                for t in range(start_d, timeline_days):
+                    if (t - start_d) >= self.max_eval_days:
+                        break
+                    pnl = s_eval[t]
+                    if pnl <= -600.0:
+                        pnl = -600.0
+                    eval_bal += pnl
+                    if eval_bal > eval_hwm:
+                        eval_hwm = eval_bal
+                    eval_floor = max(eval_floor, eval_hwm - 2000.0)
+                    if eval_bal <= eval_floor:
+                        breached = True
+                        break
+                    if eval_bal >= self.config.EVAL_PROFIT_TARGET:
+                        passed_day = t + 1
+                        break
+
+                if not breached and passed_day is not None:
+                    fund_bal = 50000.0
+                    fund_hwm = 50000.0
+                    fund_floor = 48000.0
+                    is_locked = False
+                    qual_days = 0
+
+                    for t in range(passed_day, timeline_days):
+                        if (t - passed_day) >= self.max_funded_days:
+                            break
+                        pnl = min(self.config.MAX_FUNDED_DAILY_PROFIT, s_funded[t])
+                        if pnl <= -600.0:
+                            pnl = -600.0
+                        fund_bal += pnl
+                        if pnl >= self.config.MIN_WINNING_DAY_PROFIT:
+                            qual_days += 1
+                        if fund_bal > fund_hwm:
+                            fund_hwm = fund_bal
+                        if not is_locked:
+                            if fund_hwm >= self.config.FLOOR_LOCK_TRIGGER:
+                                is_locked = True
+                                fund_floor = self.config.LOCKED_FLOOR
+                            else:
+                                fund_floor = max(fund_floor, fund_hwm - self.config.EOD_TRAILING_DD)
+                        if fund_bal <= fund_floor:
+                            break
+                        if fund_bal >= self.config.FUNDED_PAYOUT_TARGET and qual_days >= self.config.MIN_FUNDED_WINNING_DAYS:
+                            acc_payout_days[acc_idx] = t + 1
+                            break
+
+            for c in configs:
+                p_180 = sum(1 for i in range(c) if acc_payout_days[i] is not None and acc_payout_days[i] <= 180)
+                p_250 = sum(1 for i in range(c) if acc_payout_days[i] is not None and acc_payout_days[i] <= 250)
+                payouts_180[c].append(p_180)
+                payouts_250[c].append(p_250)
+
+        results = {}
+        b = 1350.0 / 87.0  # 15.517 payout to ticket fee ratio
+        for c in configs:
+            arr_180 = np.array(payouts_180[c])
+            arr_250 = np.array(payouts_250[c])
+
+            prob_ge1_180 = float(np.mean(arr_180 >= 1) * 100.0)
+            prob_ge1_250 = float(np.mean(arr_250 >= 1) * 100.0)
+            prob_ge2_180 = float(np.mean(arr_180 >= 2) * 100.0)
+            prob_ge2_250 = float(np.mean(arr_250 >= 2) * 100.0)
+            prob_ge3_180 = float(np.mean(arr_180 >= 3) * 100.0)
+            prob_ge3_250 = float(np.mean(arr_250 >= 3) * 100.0)
+
+            mean_payouts_250 = float(np.mean(arr_250))
+            ticket_cost = c * 87.0
+            expected_gross = mean_payouts_250 * 1350.0
+            expected_net = expected_gross - ticket_cost
+            ret_on_fees = (expected_net / ticket_cost) * 100.0
+
+            p_win = prob_ge1_250 / 100.0
+            kelly = p_win - ((1.0 - p_win) / b)
+
+            results[f"{c}_Accounts"] = {
+                "num_accounts": c,
+                "ticket_cost": ticket_cost,
+                "prob_ge1_180d": prob_ge1_180,
+                "prob_ge1_250d": prob_ge1_250,
+                "prob_ge2_180d": prob_ge2_180,
+                "prob_ge2_250d": prob_ge2_250,
+                "prob_ge3_180d": prob_ge3_180,
+                "prob_ge3_250d": prob_ge3_250,
+                "mean_payouts_250d": mean_payouts_250,
+                "expected_gross_cash": expected_gross,
+                "expected_net_cash": expected_net,
+                "return_on_fees_pct": ret_on_fees,
+                "kelly_fraction": kelly
+            }
+
+        return results

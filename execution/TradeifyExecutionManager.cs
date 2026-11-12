@@ -139,6 +139,8 @@ namespace NinjaTrader.NinjaScript.Strategies
             double currentDailyRealizedPnL = Account.Get(AccountItem.RealizedProfitLoss, Currency.UsDollar) - sessionStartRealizedPnL;
             double currentDailyUnrealizedPnL = Account.Get(AccountItem.UnrealizedProfitLoss, Currency.UsDollar);
             double currentDailyNetPnL = currentDailyRealizedPnL + currentDailyUnrealizedPnL;
+            double currentCash = Account.Get(AccountItem.CashValue, Currency.UsDollar);
+            double currentTotalEquity = currentCash + currentDailyUnrealizedPnL;
 
             // 1. Internal Daily Stop Check (-$600.00)
             if (currentDailyNetPnL <= -InternalDailyStopLoss)
@@ -148,7 +150,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 return;
             }
 
-            // 2. Funded Consistency Governor Ceiling (+$825.00)
+            // 2. Funded Consistency Governor Ceiling (+$825.00 / +$920.00)
             if (IsFundedAccount && currentDailyNetPnL >= FundedDailyProfitCeiling)
             {
                 isDailyHalted = true;
@@ -156,8 +158,52 @@ namespace NinjaTrader.NinjaScript.Strategies
                 return;
             }
 
-            // 3. Catastrophic Floor Check
-            double currentCash = Account.Get(AccountItem.CashValue, Currency.UsDollar);
+            // 3. Phase 7: Evaluation Absorbing Upper Barrier ("Pass-on-Touch" at $53,015.00)
+            if (!IsFundedAccount && currentTotalEquity >= 53015.0)
+            {
+                isDailyHalted = true;
+                FlattenEverything(string.Format("EVAL_AUTO_FLATTEN_EQUITY: Equity ${0:F2} reached $53,015.00 pass barrier. Evaluation officially PASSED!", currentTotalEquity));
+                return;
+            }
+
+            // 4. Phase 7: Funded Payout Absorbing Barrier ("Payout-on-Touch" at $52,660.00 with Qualifying Day)
+            if (IsFundedAccount && currentTotalEquity >= 52660.0 && currentDailyNetPnL >= 160.0)
+            {
+                isDailyHalted = true;
+                FlattenEverything(string.Format("FUNDED_PAYOUT_EQUITY: Equity ${0:F2} reached $52,660.00 payout barrier. Payout officially LOCKED!", currentTotalEquity));
+                return;
+            }
+
+            // 5. Phase 7: Funded Qualifying-Day Ratchet (+$260 MFE -> +$160 Floor)
+            if (IsFundedAccount && Position.MarketPosition != MarketPosition.Flat && currentDailyRealizedPnL < 150.0)
+            {
+                if (currentDailyUnrealizedPnL >= 260.0 && stopLossOrder != null)
+                {
+                    double targetTradePnL = 160.0 - currentDailyRealizedPnL;
+                    double ptsNeeded = (targetTradePnL + (2.48 * Position.Quantity)) / (2.0 * Position.Quantity);
+
+                    if (Position.MarketPosition == MarketPosition.Long)
+                    {
+                        double ratchetStop = Position.AveragePrice + ptsNeeded + 0.50;
+                        if (ratchetStop > stopLossOrder.StopPrice)
+                        {
+                            ChangeOrder(stopLossOrder, Position.Quantity, 0, ratchetStop);
+                            Print(string.Format("[QUAL RATCHET] Stop ratcheted to {0:F2} locking +$160.00 daily floor.", ratchetStop));
+                        }
+                    }
+                    else if (Position.MarketPosition == MarketPosition.Short)
+                    {
+                        double ratchetStop = Position.AveragePrice - ptsNeeded - 0.50;
+                        if (ratchetStop < stopLossOrder.StopPrice)
+                        {
+                            ChangeOrder(stopLossOrder, Position.Quantity, 0, ratchetStop);
+                            Print(string.Format("[QUAL RATCHET] Stop ratcheted to {0:F2} locking +$160.00 daily floor.", ratchetStop));
+                        }
+                    }
+                }
+            }
+
+            // 6. Catastrophic Floor Check
             if (currentCash <= activeFloor)
             {
                 TriggerEmergencyKillSwitch(string.Format("ACCOUNT FLOOR BREACH: Cash ${0:F2} <= Floor ${1:F2}", currentCash, activeFloor));
@@ -200,6 +246,13 @@ namespace NinjaTrader.NinjaScript.Strategies
                 else
                 {
                     rTarget = 120.0; minC = 1; maxC = 2;
+                }
+
+                // Phase 7: Finish-Line Risk Tapering Near $53,000 (remaining_to_pass < $350.00)
+                double remainingToPass = 53015.0 - currentCash;
+                if (remainingToPass > 0.0 && remainingToPass < 350.0)
+                {
+                    rTarget = Math.Max(155.0, Math.Min(rTarget, 0.90 * remainingToPass));
                 }
             }
             else

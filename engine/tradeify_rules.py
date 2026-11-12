@@ -43,6 +43,8 @@ class TradeifyAccountConfig:
     FUNDED_PAYOUT_TARGET: float = 52650.0        # +$2,650 for first payout
     MIN_FUNDED_WINNING_DAYS: int = 5             # 5 trading days with profit >= $150
     MIN_WINNING_DAY_PROFIT: float = 150.0
+    EVAL_AUTO_FLATTEN_EQUITY: float = 53015.00   # Phase 7: Absorbing upper barrier auto-flatten
+    FUNDED_PAYOUT_EQUITY: float = 52660.00       # Phase 7: Funded payout absorbing barrier
     MNQ_POINT_VALUE: float = 2.0                 # $2.00 per point
     COMMISSION_PER_MNQ_RT: float = 2.48          # $1.24 per side per contract
     SLIPPAGE_POINTS_PER_FILL: float = 0.50       # 0.50 NQ/MNQ points per market execution
@@ -96,6 +98,7 @@ class TradeifyAccountState:
         # Funded statistics
         self.funded_winning_days: int = 0
         self.total_trading_days: int = 0
+        self.max_historical_day_pnl: float = 0.0
 
     @property
     def current_equity(self) -> float:
@@ -150,6 +153,11 @@ class TradeifyAccountState:
                 r_target, min_c, max_c = 165.0, 2, 3
             else:
                 r_target, min_c, max_c = 120.0, 1, 2
+
+            # Phase 7 Step 2: Finish-Line Risk Tapering Near $53,000 (remaining_to_pass < $350.00)
+            remaining_to_pass = self.config.EVAL_AUTO_FLATTEN_EQUITY - current_equity
+            if 0.0 < remaining_to_pass < 350.0:
+                r_target = max(155.0, min(r_target, 0.90 * remaining_to_pass))
         else:
             # Regime 2: Funded Capital Preservation Tiers
             if buffer < 1150.0:
@@ -235,6 +243,9 @@ class TradeifyAccountState:
           - Updates Funded Consistency and Payout criteria.
         """
         day_pnl = self.balance - self.day_start_balance
+
+        if day_pnl > self.max_historical_day_pnl:
+            self.max_historical_day_pnl = day_pnl
 
         # Track funded winning days
         if self.phase == AccountPhase.FUNDED:

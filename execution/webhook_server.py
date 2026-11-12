@@ -92,6 +92,15 @@ async def receive_alpha_signal(request: Request):
     strategy_id = payload.get("strategy_id", "UNKNOWN")
     symbol = payload.get("symbol", "MNQ")
 
+    # Phase 7: Absorbing upper barrier auto-flatten checks
+    current_equity = system_state["current_balance"] + system_state["intraday_pnl"]
+    if not system_state["is_funded"] and current_equity >= 53015.00:
+        logger.info(f"Signal {strategy_id} skipped: Evaluation target ($53,015.00) already cleared. Account PASSED.")
+        return {"status": "skipped", "reason": "Evaluation target already cleared"}
+    if system_state["is_funded"] and current_equity >= 52660.00 and system_state["intraday_pnl"] >= 160.00:
+        logger.info(f"Signal {strategy_id} skipped: Funded payout target ($52,660.00) already cleared. Payout LOCKED.")
+        return {"status": "skipped", "reason": "Funded payout target already cleared"}
+
     # Step 2: House-Money Floor Guard for H4 in Funded Pre-Lock Mode
     if system_state["is_funded"] and system_state["current_balance"] < 52100.0 and strategy_id == "H4":
         if system_state["intraday_pnl"] >= 165.0:

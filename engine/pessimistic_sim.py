@@ -40,7 +40,12 @@ class PessimisticExecutionSimulator:
         signal: TradeSignal,
         session_bars: pd.DataFrame,
         contract_qty: int,
-        df_indicators: Optional[pd.DataFrame] = None
+        df_indicators: Optional[pd.DataFrame] = None,
+        account_phase: Optional[str] = None,
+        current_equity_before_trade: Optional[float] = None,
+        intraday_realized_pnl: float = 0.0,
+        qualifying_days: int = 0,
+        max_historical_day_pnl: float = 0.0
     ) -> List[CompletedTrade]:
         if contract_qty <= 0:
             return []
@@ -86,6 +91,32 @@ class PessimisticExecutionSimulator:
         else:
             qty_tp1 = contract_qty
             qty_runner = 0
+
+        # Phase 7: Intraday Absorbing Upper-Barrier Auto-Liquidation ("Pass-on-Touch / Payout-on-Touch")
+        tp_account_cap: Optional[float] = None
+        is_qual_ratchet_active: bool = False
+        ratchet_stop: Optional[float] = None
+
+        phase_str = str(account_phase).upper() if account_phase is not None else ""
+        if "EVALUATION" in phase_str:
+            eval_target = 53015.00
+            if current_equity_before_trade is not None and current_equity_before_trade < eval_target:
+                needed_net_pnl = eval_target - current_equity_before_trade
+                if needed_net_pnl > 0:
+                    comm_tot = self.commission_per_contract_rt * contract_qty
+                    pts_needed = (needed_net_pnl + comm_tot) / (self.point_value * contract_qty)
+                    tp_account_cap = (entry_price + pts_needed) if direction == 1 else (entry_price - pts_needed)
+        elif "FUNDED" in phase_str:
+            funded_target = 52660.00
+            if current_equity_before_trade is not None and current_equity_before_trade < funded_target and qualifying_days >= 4:
+                needed_a = funded_target - current_equity_before_trade
+                needed_b = 160.00 - intraday_realized_pnl
+                needed_net_pnl = max(needed_a, needed_b)
+                max_allowed = 920.00 - intraday_realized_pnl
+                if 0 < needed_net_pnl <= max_allowed:
+                    comm_tot = self.commission_per_contract_rt * contract_qty
+                    pts_needed = (needed_net_pnl + comm_tot) / (self.point_value * contract_qty)
+                    tp_account_cap = (entry_price + pts_needed) if direction == 1 else (entry_price - pts_needed)
 
         # Fast NumPy arrays
         highs = exec_bars["High"].to_numpy(dtype=float)
@@ -191,6 +222,31 @@ class PessimisticExecutionSimulator:
                             if ratchet_price < current_sl:
                                 current_sl = ratchet_price
 
+            # 3c. Phase 7 Step 2: Funded Qualifying-Day Ratchet (+$260 MFE -> +$160 Floor)
+            # Only active when account still needs qualifying days (< 5) and today hasn't yet qualified (< $150)
+            if "FUNDED" in phase_str and (qualifying_days < 5) and (intraday_realized_pnl < 150.0):
+                if direction == 1:
+                    bar_net_pnl = (bar_close - entry_price) * self.point_value * contract_qty - (self.commission_per_contract_rt * contract_qty)
+                else:
+                    bar_net_pnl = (entry_price - bar_close) * self.point_value * contract_qty - (self.commission_per_contract_rt * contract_qty)
+
+                if bar_net_pnl >= 260.0:
+                    target_trade_pnl = 160.00 - intraday_realized_pnl
+                    comm_tot = self.commission_per_contract_rt * contract_qty
+                    pts_needed = (target_trade_pnl + comm_tot) / (self.point_value * contract_qty)
+                    if direction == 1:
+                        cand_stop = entry_price + pts_needed + self.slippage_points
+                        if cand_stop > current_sl:
+                            current_sl = cand_stop
+                            ratchet_stop = cand_stop
+                            is_qual_ratchet_active = True
+                    else:
+                        cand_stop = entry_price - pts_needed - self.slippage_points
+                        if cand_stop < current_sl:
+                            current_sl = cand_stop
+                            ratchet_stop = cand_stop
+                            is_qual_ratchet_active = True
+
             # 4. Dynamic Trailing Indicator Exit Check (Evaluated on confirmed 5-minute candle close)
             # Engage trailing once activation threshold is reached (e.g. is_be_activated or immediate)
             trail_active = is_be_activated or (signal.trail_activation_r <= 0.0)
@@ -250,13 +306,28 @@ class PessimisticExecutionSimulator:
             # 5. Intra-Bar Price Evaluation (Stop-First Pessimistic Priority)
             if direction == 1:
                 sl_touched = (bar_low <= current_sl)
+                tp_cap_touched = (tp_account_cap is not None and bar_high >= tp_account_cap)
                 tp_touched = (tp_target is not None and bar_high >= tp_target)
 
                 # PESSIMISTIC PRIORITY: Stop Loss is executed first
                 if sl_touched:
                     exit_price = current_sl - self.slippage_points
                     rem_qty = qty_runner if (scale_out_mode and tp1_hit) else contract_qty
-                    reason = "BE" if is_be_activated else "SL"
+                    if is_qual_ratchet_active and ratchet_stop is not None and current_sl >= ratchet_stop:
+                        reason = "QUAL_RATCHET_SL"
+                    else:
+                        reason = "BE" if is_be_activated else "SL"
+                    completed_trades.append(self._create_trade(
+                        signal, direction, rem_qty, entry_time, entry_price,
+                        bar_time, exit_price, reason
+                    ))
+                    return completed_trades
+
+                # Phase 7: Account Target Absorbing Upper-Barrier Touch
+                if tp_cap_touched:
+                    exit_price = tp_account_cap
+                    rem_qty = qty_runner if (scale_out_mode and tp1_hit) else contract_qty
+                    reason = "TP_EVAL_PASS" if "EVALUATION" in phase_str else "TP_FUNDED_PAYOUT"
                     completed_trades.append(self._create_trade(
                         signal, direction, rem_qty, entry_time, entry_price,
                         bar_time, exit_price, reason
@@ -299,13 +370,28 @@ class PessimisticExecutionSimulator:
             else:
                 # Short Position Evaluation
                 sl_touched = (bar_high >= current_sl)
+                tp_cap_touched = (tp_account_cap is not None and bar_low <= tp_account_cap)
                 tp_touched = (tp_target is not None and bar_low <= tp_target)
 
                 # Stop-First Pessimistic Priority
                 if sl_touched:
                     exit_price = current_sl + self.slippage_points
                     rem_qty = qty_runner if (scale_out_mode and tp1_hit) else contract_qty
-                    reason = "BE" if is_be_activated else "SL"
+                    if is_qual_ratchet_active and ratchet_stop is not None and current_sl <= ratchet_stop:
+                        reason = "QUAL_RATCHET_SL"
+                    else:
+                        reason = "BE" if is_be_activated else "SL"
+                    completed_trades.append(self._create_trade(
+                        signal, direction, rem_qty, entry_time, entry_price,
+                        bar_time, exit_price, reason
+                    ))
+                    return completed_trades
+
+                # Phase 7: Account Target Absorbing Upper-Barrier Touch
+                if tp_cap_touched:
+                    exit_price = tp_account_cap
+                    rem_qty = qty_runner if (scale_out_mode and tp1_hit) else contract_qty
+                    reason = "TP_EVAL_PASS" if "EVALUATION" in phase_str else "TP_FUNDED_PAYOUT"
                     completed_trades.append(self._create_trade(
                         signal, direction, rem_qty, entry_time, entry_price,
                         bar_time, exit_price, reason
@@ -318,6 +404,7 @@ class PessimisticExecutionSimulator:
                         signal, direction, contract_qty, entry_time, entry_price,
                         bar_time, tp_target, "TP_FULL"
                     ))
+                    return completed_trades
                     return completed_trades
 
                 # Scale-Out Mode TP1 Hit

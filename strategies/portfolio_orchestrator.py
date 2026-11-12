@@ -159,12 +159,17 @@ class PortfolioOrchestrator:
             if optimal_qty <= 0:
                 continue
 
-            # Execute trade through pessimistic simulator
+            # Execute trade through pessimistic simulator with Phase 7 absorbing barrier & ratchet monitoring
             trades = self.sim.simulate_trade(
                 signal=sig,
                 session_bars=df_session_1m,
                 contract_qty=optimal_qty,
-                df_indicators=df_ind
+                df_indicators=df_ind,
+                account_phase=self.account.phase,
+                current_equity_before_trade=self.account.current_equity,
+                intraday_realized_pnl=self.account.intraday_pnl,
+                qualifying_days=self.account.funded_winning_days,
+                max_historical_day_pnl=self.account.max_historical_day_pnl
             )
 
             if not trades:
@@ -179,6 +184,14 @@ class PortfolioOrchestrator:
 
             can_continue, halt_reason = self.account.update_intraday_pnl(trade_net_pnl)
             self.account.close_trade(trade_net_pnl)
+
+            # Phase 7: Absorbing upper barrier auto-flattening halts further session activity
+            if trades[-1].exit_reason == "TP_EVAL_PASS":
+                self.account.is_passed = True
+                can_continue = False
+            elif trades[-1].exit_reason == "TP_FUNDED_PAYOUT":
+                self.account.is_funded_payout_eligible = True
+                can_continue = False
 
             session_trades.extend(trades)
             self.all_completed_trades.extend(trades)

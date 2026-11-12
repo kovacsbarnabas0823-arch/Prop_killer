@@ -117,6 +117,15 @@ async def receive_alpha_signal(request: Request):
     tp1_price = payload.get("tp1_price")
     tp2_price = payload.get("tp2_price")
 
+    is_pyramid = False
+    if system_state["active_position"] is not None:
+        if strategy_id == "H4" and system_state["active_position"].get("direction") == direction:
+            is_pyramid = True
+            logger.info("De-risked Same-Direction Pyramiding authorized: H4 entering concurrently with active H3 position.")
+        else:
+            logger.warning(f"Rejected signal {strategy_id}: Concurrency guard active (open position: {system_state['active_position']})")
+            return {"status": "rejected", "reason": "Active position already open in conflicting direction"}
+
     timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     banner = [

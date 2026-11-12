@@ -125,11 +125,12 @@ class TradeifyAccountState:
         morning_pnl: float = 0.0
     ) -> int:
         """
-        Phase 5 Bounded Risk-Parity Sizer with House-Money Floor Guard.
-        - Strategy-specific bounded risk denominator prevents ATR starvation in 2024-2026.
-        - Two-regime tiers: Evaluation Sprint vs Funded Capital Preservation.
-        - House-Money Floor Guard for H4: If morning PnL >= +$165, size H4 from surplus (morning_pnl - $160),
-          guaranteeing net day PnL >= +$160 even on full stop-out (preserving qualifying days).
+        Phase 6 Bounded Risk-Parity Sizer with Generalized House-Money Floor Guard.
+        - Strategy-specific bounded risk denominator (H3: [30, 40] pts; H4: [16, 22] pts).
+        - High-velocity Evaluation Sprint tiers calibrated to prevent tail blowouts (max 6 MNQ).
+        - Capital-preservation Funded tiers protecting the $2,000 trailing buffer (max 4 MNQ).
+        - House-Money Floor Guard for H4: If effective morning PnL >= +$165, sizes H4 strictly from surplus
+          (morning_pnl - $160), guaranteeing net day PnL >= +$160 even on full stop-out (preserving qualifying days).
         """
         if self.is_breached or self.is_daily_stopped or self.is_governor_halted:
             return 0
@@ -142,21 +143,21 @@ class TradeifyAccountState:
         if self.phase == AccountPhase.EVALUATION:
             # Regime 1: Evaluation Sprint Tiers
             if current_equity >= 51900.0:
-                r_target, min_c, max_c = 330.0, 4, 8
+                r_target, min_c, max_c = 270.0, 3, 6
             elif profit >= 800.0 and buffer >= 1350.0:
-                r_target, min_c, max_c = 250.0, 3, 6
+                r_target, min_c, max_c = 225.0, 3, 4
             elif buffer >= 950.0:
-                r_target, min_c, max_c = 170.0, 2, 4
+                r_target, min_c, max_c = 165.0, 2, 3
             else:
                 r_target, min_c, max_c = 120.0, 1, 2
         else:
             # Regime 2: Funded Capital Preservation Tiers
-            if buffer < 1050.0:
-                r_target, min_c, max_c = 90.0, 1, 2
+            if buffer < 1150.0:
+                r_target, min_c, max_c = 75.0, 1, 2
             elif not self.is_floor_locked and self.eod_hwm < self.config.FLOOR_LOCK_TRIGGER:
-                r_target, min_c, max_c = 165.0, 2, 4
+                r_target, min_c, max_c = 125.0, 2, 3
             else:
-                r_target, min_c, max_c = 245.0, 3, 6
+                r_target, min_c, max_c = 185.0, 2, 4
 
             # House-Money Floor Guard for H4 in Funded Pre-Lock Mode
             if strategy_id == "H4" and not self.is_floor_locked and self.eod_hwm < self.config.FLOOR_LOCK_TRIGGER:

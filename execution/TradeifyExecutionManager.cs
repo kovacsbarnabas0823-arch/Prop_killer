@@ -184,18 +184,18 @@ namespace NinjaTrader.NinjaScript.Strategies
 
             if (!IsFundedAccount)
             {
-                // Regime 1: EVALUATION Sprint Tiers
+                // Regime 1: EVALUATION Sprint Tiers (Phase 6 Calibrated)
                 if (currentCash >= 51900.0)
                 {
-                    rTarget = 330.0; minC = 4; maxC = 8;
+                    rTarget = 270.0; minC = 3; maxC = 6;
                 }
                 else if (profit >= 800.0 && buffer >= 1350.0)
                 {
-                    rTarget = 250.0; minC = 3; maxC = 6;
+                    rTarget = 225.0; minC = 3; maxC = 4;
                 }
                 else if (buffer >= 950.0)
                 {
-                    rTarget = 170.0; minC = 2; maxC = 4;
+                    rTarget = 165.0; minC = 2; maxC = 3;
                 }
                 else
                 {
@@ -204,21 +204,21 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
             else
             {
-                // Regime 2: FUNDED Capital Preservation Tiers
-                if (buffer < 1050.0)
+                // Regime 2: FUNDED Capital Preservation Tiers (Phase 6 Calibrated)
+                if (buffer < 1150.0)
                 {
-                    rTarget = 90.0; minC = 1; maxC = 2;
+                    rTarget = 75.0; minC = 1; maxC = 2;
                 }
                 else if (!isFloorLocked && eodHighWatermark < 52100.0)
                 {
-                    rTarget = 165.0; minC = 2; maxC = 4;
+                    rTarget = 125.0; minC = 2; maxC = 3;
                 }
                 else
                 {
-                    rTarget = 245.0; minC = 3; maxC = 6;
+                    rTarget = 185.0; minC = 2; maxC = 4;
                 }
 
-                // House-Money Floor Guard for H4 in Funded Pre-Lock Mode
+                // Generalized House-Money Floor Guard for H4 in Funded Pre-Lock Mode
                 if (strategyId == "H4" && !isFloorLocked && eodHighWatermark < 52100.0)
                 {
                     if (morningPnL >= 165.0)
@@ -258,10 +258,36 @@ namespace NinjaTrader.NinjaScript.Strategies
                 return;
             }
 
+            bool isPyramidEntry = false;
+            double currentDailyRealizedPnL = Account.Get(AccountItem.RealizedProfitLoss, Currency.UsDollar) - sessionStartRealizedPnL;
+            double effectiveMorningPnL = currentDailyRealizedPnL;
+
             if (Position.MarketPosition != MarketPosition.Flat)
             {
-                Print("[OEM REJECTED] Active position already open. Concurrency guard active.");
-                return;
+                // Step 1: Same-Direction Pyramiding Unlock for H4
+                bool posIsLong = (Position.MarketPosition == MarketPosition.Long);
+                if (strategyId == "H4" && posIsLong == isLong)
+                {
+                    double currentUnrealized = Account.Get(AccountItem.UnrealizedProfitLoss, Currency.UsDollar);
+                    if (!IsFundedAccount && currentUnrealized >= 100.0)
+                    {
+                        isPyramidEntry = true;
+                    }
+                    else if (IsFundedAccount)
+                    {
+                        effectiveMorningPnL = currentDailyRealizedPnL + Math.Max(0.0, 0.70 * currentUnrealized);
+                        if (effectiveMorningPnL >= 165.0)
+                        {
+                            isPyramidEntry = true;
+                        }
+                    }
+                }
+
+                if (!isPyramidEntry)
+                {
+                    Print("[OEM REJECTED] Active position already open. Concurrency guard active.");
+                    return;
+                }
             }
 
             double currentCash = Account.Get(AccountItem.CashValue, Currency.UsDollar);
@@ -269,9 +295,7 @@ namespace NinjaTrader.NinjaScript.Strategies
             double slDistPts = Math.Abs(currentPrice - stopLossPrice);
             if (slDistPts <= 0) slDistPts = 30.0;
 
-            double currentDailyRealizedPnL = Account.Get(AccountItem.RealizedProfitLoss, Currency.UsDollar) - sessionStartRealizedPnL;
-
-            int contracts = CalculateOptimalMNQSize(currentCash, slDistPts, atr14, strategyId, currentDailyRealizedPnL);
+            int contracts = CalculateOptimalMNQSize(currentCash, slDistPts, atr14, strategyId, effectiveMorningPnL);
             if (contracts <= 0)
             {
                 Print(string.Format("[OEM SKIPPED] Strategy {0} allocated 0 contracts (House-Money Floor Guard or risk buffer).", strategyId));

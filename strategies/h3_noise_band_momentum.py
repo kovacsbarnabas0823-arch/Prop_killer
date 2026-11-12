@@ -44,7 +44,12 @@ class H3NoiseBandMomentum(BaseStrategy):
         ema_span: int = 9,
         vol_factor: float = 1.10,
         vol_sma_bars: int = 12,
-        use_seeck_asymmetry: bool = True
+        use_seeck_asymmetry: bool = True,
+        start_time: str = "10:15",
+        end_time: str = "13:30",
+        kd: float = 1.10,
+        vol_filter: bool = False,
+        seeck_mode: str = "surgical"
     ):
         super().__init__(name="H3_Zarattini_NoiseBand_Momentum", strategy_id="H3")
         self.min_sl_dist = min_sl_dist
@@ -54,6 +59,11 @@ class H3NoiseBandMomentum(BaseStrategy):
         self.vol_factor = vol_factor
         self.vol_sma_bars = vol_sma_bars
         self.use_seeck_asymmetry = use_seeck_asymmetry
+        self.start_time = start_time
+        self.end_time = end_time
+        self.kd = kd
+        self.vol_filter = vol_filter
+        self.seeck_mode = seeck_mode
 
     def evaluate_session(
         self,
@@ -100,14 +110,15 @@ class H3NoiseBandMomentum(BaseStrategy):
         ema9_5m = resampled_5m["Close"].ewm(span=self.ema_span, adjust=False).mean()
         vol_sma_5m = resampled_5m["Volume"].rolling(window=self.vol_sma_bars, min_periods=4).mean()
 
-        # Phase 4 Strict Execution Window: 10:30:00 to 13:30:00 NY
-        eval_window_5m = resampled_5m.between_time("10:30", "13:30")
+        # Phase 6 Calibrated Execution Window: self.start_time to self.end_time (default 10:15 - 13:30 NY)
+        eval_window_5m = resampled_5m.between_time(self.start_time, self.end_time)
         if eval_window_5m.empty:
             return []
 
-        # Reference daily features for Seeck Asymmetry
+        # Reference daily features for Seeck Asymmetry & Bull-Trap Guard
         rth_sub = df_session_1m.between_time("09:30", "09:30")
         d_open = float(rth_sub.iloc[0]["Open"]) if not rth_sub.empty else prev_close
+        prev_high = preprocessor.prev_day_high_map.get(session_date) if preprocessor else None
         prev_low = preprocessor.prev_day_low_map.get(session_date) if preprocessor else None
         sma_atr20 = preprocessor.daily_atr_sma20_map.get(session_date, 0.0) if preprocessor and hasattr(preprocessor, "daily_atr_sma20_map") else daily_atr
 
@@ -117,8 +128,8 @@ class H3NoiseBandMomentum(BaseStrategy):
             bar_end_time = bar_start + pd.Timedelta(minutes=5)
             time_str = bar_end_time.strftime("%H:%M")
 
-            # Lookup active Zarattini Noise Band
-            band = preprocessor.get_noise_band(session_date, time_str)
+            # Lookup active Zarattini Noise Band with calibrated Kd
+            band = preprocessor.get_noise_band(session_date, time_str, kd=self.kd)
             if band is None:
                 continue
 
@@ -133,7 +144,9 @@ class H3NoiseBandMomentum(BaseStrategy):
             curr_vwap = float(vwap_series.loc[prior_vwap_mask].iloc[-1])
             curr_ema = float(ema9_5m.loc[bar_start])
 
-            vol_ok = (vol_sma_val > 0 and vol_5m >= self.vol_factor * vol_sma_val)
+            vol_ok = True
+            if self.vol_filter:
+                vol_ok = (vol_sma_val > 0 and vol_5m >= self.vol_factor * vol_sma_val)
 
             # --- LONG BREAKOUT ---
             if close_5m > upper_band and close_5m > curr_vwap and curr_ema > curr_vwap and vol_ok:
@@ -170,10 +183,15 @@ class H3NoiseBandMomentum(BaseStrategy):
                     ))
                     break  # Exactly 1 trade per day!
 
-            # --- SHORT BREAKOUT (with Seeck 2026 Asymmetry Filter) ---
+            # --- SHORT BREAKOUT ---
             elif close_5m < lower_band and close_5m < curr_vwap and curr_ema < curr_vwap and vol_ok:
                 short_valid = True
-                if self.use_seeck_asymmetry:
+                if self.seeck_mode == "surgical":
+                    # Surgical Bull-Trap Guard: ONLY block shorts when gapping up above yesterday's high in low-vol regime
+                    is_bull_trap = (prev_high is not None and d_open > prev_high) and (daily_atr < sma_atr20)
+                    if is_bull_trap:
+                        short_valid = False
+                elif self.seeck_mode == "strict" and self.use_seeck_asymmetry:
                     # Bearish Intraday/Daily Structure: Non-gap-up day OR close < prev_low OR expanding ATR
                     is_bearish = (d_open <= prev_close) or (prev_low is not None and close_5m < prev_low) or (daily_atr >= sma_atr20)
                     if not is_bearish:

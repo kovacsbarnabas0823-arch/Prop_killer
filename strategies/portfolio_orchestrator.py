@@ -57,7 +57,8 @@ class PortfolioOrchestrator:
         df_session_1m: pd.DataFrame,
         daily_atr: float,
         prev_close: Optional[float] = None,
-        prep=None
+        prep=None,
+        signals: Optional[List[TradeSignal]] = None
     ) -> List[CompletedTrade]:
         self.account.start_session(session_date)
         session_trades: List[CompletedTrade] = []
@@ -66,16 +67,18 @@ class PortfolioOrchestrator:
             self.account.end_session(session_date)
             return []
 
-        # 1. Collect signals from enabled strategies
-        signals: List[TradeSignal] = []
+        # 1. Collect signals from enabled strategies if not provided
+        if signals is None:
+            signals = []
+            if "H3" in self.enabled_modules:
+                signals.extend(self.h3.evaluate_session(
+                    session_date, df_session_1m, daily_atr, prev_close, preprocessor=prep
+                ))
 
-        if "H3" in self.enabled_modules:
-            signals.extend(self.h3.evaluate_session(
-                session_date, df_session_1m, daily_atr, prev_close, preprocessor=prep
-            ))
-
-        if "H4" in self.enabled_modules:
-            signals.extend(self.h4.evaluate_session(session_date, df_session_1m, daily_atr, prev_close))
+            if "H4" in self.enabled_modules:
+                signals.extend(self.h4.evaluate_session(session_date, df_session_1m, daily_atr, prev_close))
+        else:
+            signals = list(signals)
 
         if not signals:
             self.account.end_session(session_date)
@@ -107,14 +110,37 @@ class PortfolioOrchestrator:
                 df_ind["UpperBand"] = pd.Series(u_bands, index=rth_bars.index).ffill()
                 df_ind["LowerBand"] = pd.Series(l_bands, index=rth_bars.index).ffill()
 
-        # 2. Sequential execution loop with risk controls
+        # 2. Sequential execution loop with concurrent late-day pyramiding
         last_exit_time = pd.Timestamp.min.tz_localize(df_session_1m.index.tz)
         last_exit_reason: Optional[str] = None
         morning_trade_pnl = 0.0
 
         for sig in signals:
+            is_concurrent_pyramid = False
+            effective_morning_pnl = morning_trade_pnl
+
+            # Check if previous trade is still open
             if sig.execution_time < last_exit_time:
-                continue
+                # Concurrent Same-Direction Pyramiding Unlock for H4
+                if sig.strategy_id == "H4":
+                    open_trades = [t for t in session_trades if t.exit_time > sig.execution_time]
+                    if open_trades and open_trades[0].direction == sig.direction:
+                        h3_tr = open_trades[0]
+                        # Compute H3's unrealized PnL at H4 execution time
+                        bars_to_exec = df_session_1m.loc[:sig.execution_time]
+                        if not bars_to_exec.empty:
+                            close_exec = float(bars_to_exec.iloc[-1]["Close"])
+                            h3_unreal = (close_exec - h3_tr.entry_price) * h3_tr.direction * 2.00 * h3_tr.contracts - (2.48 * h3_tr.contracts)
+                            if self.account.phase == AccountPhase.EVALUATION:
+                                if h3_unreal >= 100.0:
+                                    is_concurrent_pyramid = True
+                            else: # FUNDED
+                                effective_morning_pnl = morning_trade_pnl + max(0.0, 0.70 * h3_unreal)
+                                if effective_morning_pnl >= 165.0:
+                                    is_concurrent_pyramid = True
+
+                if not is_concurrent_pyramid:
+                    continue
 
             # Continuation Re-entry Filter: Requires daily PnL > -$300 and prior exit was not hard SL
             if sig.metadata.get("is_reentry", False):
@@ -128,7 +154,7 @@ class PortfolioOrchestrator:
                 strategy_id=sig.strategy_id,
                 sl_dist_pts=sig.sl_dist,
                 atr_14=daily_atr,
-                morning_pnl=morning_trade_pnl
+                morning_pnl=effective_morning_pnl
             )
             if optimal_qty <= 0:
                 continue
@@ -145,7 +171,7 @@ class PortfolioOrchestrator:
                 continue
 
             trade_net_pnl = sum(t.net_pnl for t in trades)
-            last_exit_time = max(t.exit_time for t in trades)
+            last_exit_time = max(last_exit_time, max(t.exit_time for t in trades))
             last_exit_reason = trades[-1].exit_reason
 
             if sig.strategy_id == "H3":

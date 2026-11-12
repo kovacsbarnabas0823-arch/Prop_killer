@@ -170,12 +170,13 @@ class SessionDataPreprocessor:
         logger.info("Pre-grouping sessions into daily lookup table...")
         self.daily_dict = {d: group for d, group in df.groupby(df.index.date)}
 
-        logger.info("Precomputing Zarattini-Baltussen time-of-day noise envelopes (10:30-14:00 NY)...")
+        logger.info("Precomputing Zarattini-Baltussen time-of-day noise envelopes (10:00-14:00 NY)...")
         checkpoints = [
-            "10:30", "10:45", "11:00", "11:15", "11:30", "11:45",
+            "10:00", "10:15", "10:30", "10:45", "11:00", "11:15", "11:30", "11:45",
             "12:00", "12:15", "12:30", "12:45", "13:00", "13:15", "13:30",
             "13:45", "14:00"
         ]
+        self.checkpoints = checkpoints
         dates_list = sorted(list(self.daily_dict.keys()))
 
         # For each checkpoint, extract Close across all days
@@ -191,7 +192,11 @@ class SessionDataPreprocessor:
             sigma_cp = df_cp["move"].rolling(window=14).mean().shift(1)
             moves_by_cp[cp] = sigma_cp.to_dict()
 
-        # Build noise_band_map with institutional Kd = 1.25 multiplier (removing false-breakout Kd=1.12)
+        self.moves_by_cp = moves_by_cp
+        self.ref_high_map = {}
+        self.ref_low_map = {}
+
+        # Build noise_band_map with default institutional Kd = 1.25 multiplier
         kd = 1.25
         for d in dates_list:
             if d not in self.prev_day_close_map or pd.isna(self.prev_day_close_map[d]):
@@ -206,6 +211,8 @@ class SessionDataPreprocessor:
             d_open = float(rth_sub.iloc[0]["Open"])
             ref_high = max(d_open, p_close)
             ref_low = min(d_open, p_close)
+            self.ref_high_map[d] = ref_high
+            self.ref_low_map[d] = ref_low
 
             self.noise_band_map[d] = {}
             for cp in checkpoints:
@@ -219,8 +226,22 @@ class SessionDataPreprocessor:
         """Returns all 1-minute bars for a specific date in America/New_York timezone via instant O(1) hash lookup."""
         return self.daily_dict.get(session_date, pd.DataFrame())
 
-    def get_noise_band(self, session_date, time_str: str) -> Optional[Tuple[float, float]]:
+    def get_noise_band(self, session_date, time_str: str, kd: Optional[float] = None) -> Optional[Tuple[float, float]]:
         """Returns (UpperBand, LowerBand) for the given date and active time checkpoint."""
+        if kd is not None and abs(kd - 1.25) > 1e-4:
+            ref_h = self.ref_high_map.get(session_date)
+            ref_l = self.ref_low_map.get(session_date)
+            if ref_h is None or ref_l is None:
+                return None
+            valid_cps = [cp for cp in self.checkpoints if cp <= time_str]
+            if not valid_cps:
+                return None
+            latest_cp = max(valid_cps)
+            sig = self.moves_by_cp[latest_cp].get(session_date)
+            if sig is None or pd.isna(sig) or sig <= 0:
+                return None
+            return (ref_h + (kd * sig), ref_l - (kd * sig))
+
         day_bands = self.noise_band_map.get(session_date)
         if not day_bands:
             return None

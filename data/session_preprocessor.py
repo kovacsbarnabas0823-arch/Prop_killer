@@ -15,7 +15,8 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from datetime import datetime, date, timedelta
+from typing import Dict, Optional, Tuple, Any
 import numpy as np
 import pandas as pd
 import pytz
@@ -28,6 +29,86 @@ logging.basicConfig(
 logger = logging.getLogger("SessionPreprocessor")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def is_cme_early_close(session_date: date) -> Tuple[bool, str]:
+    """
+    Determines if session_date is a scheduled CME early-close holiday for Equity Index Futures (NQ/MNQ).
+    Returns (is_early_close, close_time_est_str) e.g. (True, "13:00:00") or (False, "16:00:00").
+    """
+    year = session_date.year
+    month = session_date.month
+    day = session_date.day
+    weekday = session_date.weekday()  # 0 = Mon, ..., 4 = Fri
+
+    # 1. Day after Thanksgiving (Black Friday): 4th Friday of November (day 22-28)
+    if month == 11 and weekday == 4 and 22 <= day <= 28:
+        return True, "13:00:00"
+
+    # 2. Christmas Eve (Dec 24): if weekday
+    if month == 12 and day == 24 and weekday < 5:
+        return True, "13:00:00"
+
+    # 3. July 3rd (Day before Independence Day)
+    if month == 7 and day == 3 and weekday < 5:
+        return True, "13:00:00"
+
+    return False, "16:00:00"
+
+
+def get_cme_flatten_time(session_date: date) -> str:
+    """
+    Returns the mandatory EOD liquidation cutoff time string in America/New_York:
+    - "12:58:00" on scheduled CME early-close holidays
+    - "15:44:00" on standard RTH trading days
+    """
+    is_early, _ = is_cme_early_close(session_date)
+    return "12:58:00" if is_early else "15:44:00"
+
+
+def get_cme_quarterly_rollover(year: int, month: int) -> Tuple[date, date]:
+    """
+    Returns (third_friday, rollover_thursday) for CME equity index contracts in month (3, 6, 9, 12).
+    CME Equity index rolls on the 2nd Thursday before the 3rd Friday of the expiry month.
+    """
+    first_day = date(year, month, 1)
+    first_friday_day = 1 + (4 - first_day.weekday()) % 7
+    third_friday = date(year, month, first_friday_day + 14)
+    rollover_thursday = third_friday - timedelta(days=8)
+    return third_friday, rollover_thursday
+
+
+def get_active_mnq_contract(dt: Optional[date] = None) -> str:
+    """
+    Resolves the active front-month CME Micro E-mini Nasdaq (MNQ) contract symbol.
+    Quarterly cycle:
+      H = March, M = June, U = September, Z = December.
+    Rollover occurs on the 2nd Thursday before the 3rd Friday of each expiry month.
+    """
+    if dt is None:
+        dt = date.today()
+
+    year = dt.year
+    month_codes = {3: 'H', 6: 'M', 9: 'U', 12: 'Z'}
+    quarters = [
+        (year - 1, 12),
+        (year, 3),
+        (year, 6),
+        (year, 9),
+        (year, 12),
+        (year + 1, 3)
+    ]
+
+    for i in range(len(quarters) - 1):
+        y_curr, m_curr = quarters[i]
+        y_next, m_next = quarters[i + 1]
+        _, roll_curr = get_cme_quarterly_rollover(y_curr, m_curr)
+        _, roll_next = get_cme_quarterly_rollover(y_next, m_next)
+        if roll_curr <= dt < roll_next:
+            return f"MNQ{month_codes[m_next]}{str(y_next)[-1]}"
+
+    return "MNQ"
+
 
 
 class SessionDataPreprocessor:

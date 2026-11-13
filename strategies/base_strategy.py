@@ -60,6 +60,8 @@ class CompletedTrade:
     hold_duration_seconds: float
     hold_duration_minutes: float
     r_multiple: float
+    mfe_usd: float = 0.0
+    mae_usd: float = 0.0
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 

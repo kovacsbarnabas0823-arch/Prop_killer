@@ -1,5 +1,6 @@
 #region Using declarations
 using System;
+using System.IO;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
@@ -13,15 +14,17 @@ using NinjaTrader.Data;
 namespace NinjaTrader.NinjaScript.Strategies
 {
     /// <summary>
-    /// Institutional Order Execution Manager for NinjaTrader 8.
+    /// Institutional Order Execution Manager for NinjaTrader 8 (Phase 9 Hardened).
     /// Engineered for Tradeify $50K Growth EOD Trailing Drawdown Accounts.
     ///
     /// Key Capabilities:
+    ///   - Atomic State Persistence in NinjaTrader.Core.Globals.UserDataDir.
+    ///   - CME Early-Close Holiday Guard (Black Friday, Christmas Eve, July 3rd closing at 13:00 EST).
     ///   - Dynamic Bellman 4-Tier Position Sizing (2 / 3 / 4 / 6 MNQ).
     ///   - Strict Contract Exclusivity: CME MNQ ($2.00/pt) Only.
     ///   - Intraday Hard Circuit Breakers: -$600.00 Internal Daily Stop.
-    ///   - Funded Consistency Governor Ceiling: +$825.00 (protecting 35% rule).
-    ///   - Hard 15:44:00 EST EOD Flatten Timer.
+    ///   - Funded Consistency Governor Ceiling: +$920.00 (protecting 35% rule).
+    ///   - Hard Flatten Timers (12:58:00 EST on early-close, 15:44:00 EST standard).
     ///   - Server-Side Resting OCO Partial Scale-Out Brackets.
     ///   - 10-Second Trade Duration Compliance Monitor.
     /// </summary>
@@ -29,7 +32,7 @@ namespace NinjaTrader.NinjaScript.Strategies
     {
         #region Parameters
         [NinjaScriptProperty]
-        [Display(Name = "Is Funded Account", Description = "False for Evaluation ($53K Target), True for Sim-Funded ($825 Daily Profit Ceiling)", Order = 1, GroupName = "Tradeify Account Parameters")]
+        [Display(Name = "Is Funded Account", Description = "False for Evaluation ($53K Target), True for Sim-Funded ($920 Daily Profit Ceiling)", Order = 1, GroupName = "Tradeify Account Parameters")]
         public bool IsFundedAccount { get; set; } = false;
 
         [NinjaScriptProperty]
@@ -57,15 +60,144 @@ namespace NinjaTrader.NinjaScript.Strategies
         private double eodHighWatermark = 50000.0;
         private double activeFloor = 48000.0;
         private bool isFloorLocked = false;
+        private int qualifyingDaysCount = 0;
+        private double maxHistoricalDailyPnL = 0.0;
         private double sessionStartRealizedPnL = 0.0;
         private bool isDailyHalted = false;
         private DateTime lastQuoteTime = DateTime.MinValue;
         private DateTime lastEntryTime = DateTime.MinValue;
+        private string lastSessionDate = string.Empty;
 
         private Order entryOrder = null;
         private Order stopLossOrder = null;
         private Order profitTargetOrder = null;
         private string activeOcoId = string.Empty;
+        #endregion
+
+        #region CME Early-Close Holiday Helper
+        public static bool IsCmeEarlyClose(DateTime date)
+        {
+            int month = date.Month;
+            int day = date.Day;
+            DayOfWeek dow = date.DayOfWeek;
+
+            // 1. Black Friday: 4th Friday in November (day 22-28)
+            if (month == 11 && dow == DayOfWeek.Friday && day >= 22 && day <= 28)
+                return true;
+
+            // 2. Christmas Eve (Dec 24): weekday
+            if (month == 12 && day == 24 && dow != DayOfWeek.Saturday && dow != DayOfWeek.Sunday)
+                return true;
+
+            // 3. July 3rd: weekday
+            if (month == 7 && day == 3 && dow != DayOfWeek.Saturday && dow != DayOfWeek.Sunday)
+                return true;
+
+            return false;
+        }
+        #endregion
+
+        #region State Persistence Helpers
+        private string GetStateFilePath()
+        {
+            try
+            {
+                string dir = NinjaTrader.Core.Globals.UserDataDir;
+                return Path.Combine(dir, "tradeify_account_state.json");
+            }
+            catch
+            {
+                return "tradeify_account_state.json";
+            }
+        }
+
+        private void LoadStateFromFile()
+        {
+            try
+            {
+                string path = GetStateFilePath();
+                if (File.Exists(path))
+                {
+                    string json = File.ReadAllText(path);
+                    // Minimal robust JSON line parser
+                    eodHighWatermark = ExtractDoubleJson(json, "eod_hwm", eodHighWatermark);
+                    activeFloor = ExtractDoubleJson(json, "liquidation_floor", activeFloor);
+                    isFloorLocked = ExtractBoolJson(json, "is_floor_locked", isFloorLocked);
+                    qualifyingDaysCount = (int)ExtractDoubleJson(json, "qualifying_days_count", qualifyingDaysCount);
+                    maxHistoricalDailyPnL = ExtractDoubleJson(json, "max_historical_daily_pnl", maxHistoricalDailyPnL);
+                    Print(string.Format("[STATE RESTORED] HighWatermark: ${0:F2} | Floor: ${1:F2} | FloorLocked: {2} | QualDays: {3}",
+                        eodHighWatermark, activeFloor, isFloorLocked, qualifyingDaysCount));
+                }
+            }
+            catch (Exception ex)
+            {
+                Print(string.Format("[STATE LOAD ERROR] Could not load state: {0}", ex.Message));
+            }
+        }
+
+        private void SaveStateToFile()
+        {
+            try
+            {
+                string path = GetStateFilePath();
+                string tempPath = path + ".tmp";
+                string json = string.Format(
+                    "{{\n  \"eod_hwm\": {0:F2},\n  \"liquidation_floor\": {1:F2},\n  \"is_floor_locked\": {2},\n  \"qualifying_days_count\": {3},\n  \"max_historical_daily_pnl\": {4:F2},\n  \"is_funded\": {5},\n  \"last_updated\": \"{6}\"\n}}",
+                    eodHighWatermark,
+                    activeFloor,
+                    isFloorLocked ? "true" : "false",
+                    qualifyingDaysCount,
+                    maxHistoricalDailyPnL,
+                    IsFundedAccount ? "true" : "false",
+                    DateTime.UtcNow.ToString("o")
+                );
+
+                File.WriteAllText(tempPath, json);
+                if (File.Exists(path))
+                    File.Delete(path);
+                File.Move(tempPath, path);
+            }
+            catch (Exception ex)
+            {
+                Print(string.Format("[STATE SAVE ERROR] Could not save state: {0}", ex.Message));
+            }
+        }
+
+        private double ExtractDoubleJson(string json, string key, double defaultVal)
+        {
+            try
+            {
+                int kIdx = json.IndexOf("\"" + key + "\"");
+                if (kIdx < 0) return defaultVal;
+                int colonIdx = json.IndexOf(":", kIdx);
+                if (colonIdx < 0) return defaultVal;
+                int commaIdx = json.IndexOfAny(new char[] { ',', '\n', '}' }, colonIdx);
+                if (commaIdx < 0) commaIdx = json.Length;
+                string valStr = json.Substring(colonIdx + 1, commaIdx - colonIdx - 1).Trim().Replace("\"", "");
+                double res;
+                if (double.TryParse(valStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out res))
+                    return res;
+            }
+            catch { }
+            return defaultVal;
+        }
+
+        private bool ExtractBoolJson(string json, string key, bool defaultVal)
+        {
+            try
+            {
+                int kIdx = json.IndexOf("\"" + key + "\"");
+                if (kIdx < 0) return defaultVal;
+                int colonIdx = json.IndexOf(":", kIdx);
+                if (colonIdx < 0) return defaultVal;
+                int commaIdx = json.IndexOfAny(new char[] { ',', '\n', '}' }, colonIdx);
+                if (commaIdx < 0) commaIdx = json.Length;
+                string valStr = json.Substring(colonIdx + 1, commaIdx - colonIdx - 1).Trim().ToLower();
+                return valStr.Contains("true");
+            }
+            catch { }
+            return defaultVal;
+        }
         #endregion
 
         protected override void OnStateChange()
@@ -88,6 +220,14 @@ namespace NinjaTrader.NinjaScript.Strategies
                 isFloorLocked = false;
                 isDailyHalted = false;
             }
+            else if (State == State.DataLoaded)
+            {
+                LoadStateFromFile();
+            }
+            else if (State == State.Terminated)
+            {
+                SaveStateToFile();
+            }
         }
 
         protected override void OnBarUpdate()
@@ -101,14 +241,17 @@ namespace NinjaTrader.NinjaScript.Strategies
                 return;
             }
 
-            // Timezone-Aware 15:44:00 EST Hard Flatten Guard
+            // Timezone-Aware CME Holiday & Hard Flatten Guard
             DateTime estNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time"));
-            if (estNow.TimeOfDay >= new TimeSpan(15, 44, 0))
+            bool isEarlyClose = IsCmeEarlyClose(estNow.Date);
+            TimeSpan flattenCutoff = isEarlyClose ? new TimeSpan(12, 58, 0) : new TimeSpan(15, 44, 0);
+
+            if (estNow.TimeOfDay >= flattenCutoff)
             {
                 if (Position.MarketPosition != MarketPosition.Flat || entryOrder != null)
                 {
-                    Print("[EOD FLATTEN] 15:44:00 EST reached. Liquidating all exposure before 15:45:00 deadline.");
-                    FlattenEverything("15:44:00 Hard Session Close");
+                    Print(string.Format("[EOD FLATTEN] {0} EST reached. Liquidating all exposure before session close.", flattenCutoff));
+                    FlattenEverything("Mandatory EOD Hard Session Close");
                 }
                 return;
             }
@@ -150,7 +293,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 return;
             }
 
-            // 2. Funded Consistency Governor Ceiling (+$825.00 / +$920.00)
+            // 2. Funded Consistency Governor Ceiling (+$920.00)
             if (IsFundedAccount && currentDailyNetPnL >= FundedDailyProfitCeiling)
             {
                 isDailyHalted = true;
@@ -183,13 +326,6 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         /// <summary>
         /// Calculates optimal MNQ contract count via Phase 5 Bounded Risk-Parity Sizer + House-Money Floor Guard.
-        /// Formula:
-        ///   refPts = (strategyId == "H4") ? Math.Max(16.0, Math.Min(22.0, 0.09 * atr14))
-        ///                                 : Math.Max(30.0, Math.Min(40.0, 0.18 * atr14));
-        ///   unitRiskUsd = (refPts * 2.00) + 4.48;
-        ///   rawContracts = round(rTarget / unitRiskUsd);
-        ///   maxSafeContracts = floor((1.35 * rTarget) / ((slDistPts * 2.00) + 4.48));
-        ///   contracts = clip(min(rawContracts, maxSafeContracts), minC, maxC);
         /// </summary>
         public int CalculateOptimalMNQSize(double currentCash, double slDistPts = 30.0, double atr14 = 0.0, string strategyId = "H3", double morningPnL = 0.0)
         {
@@ -258,6 +394,187 @@ namespace NinjaTrader.NinjaScript.Strategies
 
             double effAtr = (atr14 > 0.0) ? atr14 : 200.0;
             double refPts = (strategyId == "H4")
+                ? Math.Max(16.0, Math.Min(22.0, 0.09 * effAtr))
+                : Math.Max(30.0, Math.Min(40.0, 0.18 * effAtr));
+
+            double unitRiskUsd = (refPts * 2.00) + 4.48;
+            int rawContracts = (int)Math.Round(rTarget / unitRiskUsd);
+
+            double perContractSlRisk = (slDistPts * 2.00) + 4.48;
+            int maxSafeContracts = (int)Math.Max(1, Math.Floor((1.35 * rTarget) / perContractSlRisk));
+
+            int contracts = Math.Min(rawContracts, maxSafeContracts);
+            return Math.Max(minC, Math.Min(maxC, contracts));
+        }
+
+        /// <summary>
+        /// External signal entry point invoked by Webhook or Signal Module.
+        /// </summary>
+        public void SubmitSignalEntry(bool isLong, double stopLossPrice, double targetPrice1, double atr14 = 0.0, string strategyId = "H3")
+        {
+            if (isDailyHalted)
+            {
+                Print("[OEM REJECTED] Cannot enter: Account halted for session by circuit breaker.");
+                return;
+            }
+
+            DateTime estNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time"));
+            bool isEarlyClose = IsCmeEarlyClose(estNow.Date);
+            if (isEarlyClose)
+            {
+                if (strategyId == "H4")
+                {
+                    Print("[OEM REJECTED] CME Early-Close Day: 15:00 H4 session is cancelled.");
+                    return;
+                }
+                if (estNow.TimeOfDay >= new TimeSpan(12, 45, 0))
+                {
+                    Print("[OEM REJECTED] CME Early-Close Liquidation Window: entries blocked after 12:45 EST.");
+                    return;
+                }
+            }
+
+            bool isPyramidEntry = false;
+            double currentDailyRealizedPnL = Account.Get(AccountItem.RealizedProfitLoss, Currency.UsDollar) - sessionStartRealizedPnL;
+            double effectiveMorningPnL = currentDailyRealizedPnL;
+
+            if (Position.MarketPosition != MarketPosition.Flat)
+            {
+                // Same-Direction Pyramiding Unlock for H4
+                bool posIsLong = (Position.MarketPosition == MarketPosition.Long);
+                if (strategyId == "H4" && posIsLong == isLong)
+                {
+                    double currentUnrealized = Account.Get(AccountItem.UnrealizedProfitLoss, Currency.UsDollar);
+                    if (!IsFundedAccount && currentUnrealized >= 100.0)
+                    {
+                        isPyramidEntry = true;
+                    }
+                    else if (IsFundedAccount)
+                    {
+                        effectiveMorningPnL = currentDailyRealizedPnL + Math.Max(0.0, 0.70 * currentUnrealized);
+                        if (effectiveMorningPnL >= 165.0)
+                        {
+                            isPyramidEntry = true;
+                        }
+                    }
+                }
+
+                if (!isPyramidEntry)
+                {
+                    Print("[OEM REJECTED] Active position already open. Concurrency guard active.");
+                    return;
+                }
+            }
+
+            double currentCash = Account.Get(AccountItem.CashValue, Currency.UsDollar);
+            double currentPrice = Close[0];
+            double slDistPts = Math.Abs(currentPrice - stopLossPrice);
+            if (slDistPts <= 0) slDistPts = 30.0;
+
+            int contracts = CalculateOptimalMNQSize(currentCash, slDistPts, atr14, strategyId, effectiveMorningPnL);
+            if (contracts <= 0)
+            {
+                Print(string.Format("[OEM SKIPPED] Strategy {0} allocated 0 contracts (House-Money Floor Guard or risk buffer).", strategyId));
+                return;
+            }
+
+            OrderAction action = isLong ? OrderAction.Buy : OrderAction.SellShort;
+            string signalName = isLong ? "MNQ_LONG_ENTRY" : "MNQ_SHORT_ENTRY";
+
+            lastEntryTime = DateTime.UtcNow;
+            entryOrder = SubmitOrderUnmanaged(0, action, OrderType.Market, contracts, 0, 0, "", signalName);
+
+            Print(string.Format("[OEM EXECUTED] {0} {1} MNQ contracts (SL Dist: {2:F2} pts, Strat: {3}). Cash: ${4:F2} | Floor: ${5:F2}",
+                action, contracts, slDistPts, strategyId, currentCash, activeFloor));
+
+            SaveStateToFile();
+        }
+
+        protected override void OnExecutionUpdate(Execution execution, string executionId, double price, int quantity,
+            MarketPosition marketPosition, string orderId, DateTime time)
+        {
+            if (entryOrder != null && execution.Order == entryOrder)
+            {
+                PlaceServerSideBrackets(execution.Order, price, quantity);
+            }
+            else if (Position.MarketPosition == MarketPosition.Flat)
+            {
+                if (lastEntryTime != DateTime.MinValue)
+                {
+                    double holdSeconds = (DateTime.UtcNow - lastEntryTime).TotalSeconds;
+                    if (holdSeconds < 10.0)
+                    {
+                        Print(string.Format("[COMPLIANCE WARNING] Trade closed after {0:F1}s (< 10s rule). Ensure >50% duration compliance.", holdSeconds));
+                    }
+                    lastEntryTime = DateTime.MinValue;
+                }
+
+                // Check EOD high water mark and floor lock
+                double currentCash = Account.Get(AccountItem.CashValue, Currency.UsDollar);
+                if (currentCash > eodHighWatermark)
+                {
+                    eodHighWatermark = currentCash;
+                    if (IsFundedAccount && eodHighWatermark >= 52100.0)
+                    {
+                        isFloorLocked = true;
+                        activeFloor = 50100.0;
+                    }
+                    else if (!isFloorLocked)
+                    {
+                        activeFloor = Math.Max(activeFloor, eodHighWatermark - 2000.0);
+                    }
+                }
+
+                SaveStateToFile();
+            }
+        }
+
+        private void PlaceServerSideBrackets(Order parent, double fillPrice, int quantity)
+        {
+            activeOcoId = Guid.NewGuid().ToString("N").Substring(0, 8);
+            bool isLong = (parent.OrderAction == OrderAction.Buy);
+
+            double slPrice = isLong ? (fillPrice - 25.0) : (fillPrice + 25.0);
+            double tpPrice = isLong ? (fillPrice + 35.0) : (fillPrice - 35.0);
+
+            OrderAction slAction = isLong ? OrderAction.Sell : OrderAction.BuyToCover;
+            OrderAction tpAction = isLong ? OrderAction.Sell : OrderAction.BuyToCover;
+
+            stopLossOrder = SubmitOrderUnmanaged(0, slAction, OrderType.StopMarket, quantity, 0, slPrice, activeOcoId, "SL_" + activeOcoId);
+            profitTargetOrder = SubmitOrderUnmanaged(0, tpAction, OrderType.Limit, quantity, tpPrice, 0, activeOcoId, "TP_" + activeOcoId);
+
+            Print(string.Format("[SERVER OCO] Group {0} armed for {1} MNQ | SL: {2:F2} | TP: {3:F2}",
+                activeOcoId, quantity, slPrice, tpPrice));
+        }
+
+        public void FlattenEverything(string reason)
+        {
+            Print(string.Format("[FLATTEN ENGAGED] {0}", reason));
+
+            if (entryOrder != null && (entryOrder.OrderState == OrderState.Working || entryOrder.OrderState == OrderState.Accepted))
+                CancelOrder(entryOrder);
+            if (stopLossOrder != null && (stopLossOrder.OrderState == OrderState.Working || stopLossOrder.OrderState == OrderState.Accepted))
+                CancelOrder(stopLossOrder);
+            if (profitTargetOrder != null && (profitTargetOrder.OrderState == OrderState.Working || profitTargetOrder.OrderState == OrderState.Accepted))
+                CancelOrder(profitTargetOrder);
+
+            if (Position.MarketPosition == MarketPosition.Long)
+                SubmitOrderUnmanaged(0, OrderAction.Sell, OrderType.Market, Position.Quantity, 0, 0, "", "FLATTEN_LONG");
+            else if (Position.MarketPosition == MarketPosition.Short)
+                SubmitOrderUnmanaged(0, OrderAction.BuyToCover, OrderType.Market, Position.Quantity, 0, 0, "", "FLATTEN_SHORT");
+
+            SaveStateToFile();
+        }
+
+        public void TriggerEmergencyKillSwitch(string reason)
+        {
+            isDailyHalted = true;
+            Print(string.Format("[EMERGENCY KILL-SWITCH] {0}", reason));
+            FlattenEverything(reason);
+        }
+    }
+}
+
                 ? Math.Max(16.0, Math.Min(22.0, 0.09 * effAtr))
                 : Math.Max(30.0, Math.Min(40.0, 0.18 * effAtr));
 

@@ -143,6 +143,8 @@ class PessimisticExecutionSimulator:
             signal_exit_cutoff = int(parts[0]) * 60 + int(parts[1])
 
         bars_held = 0
+        self._max_high_seen = float("-inf")
+        self._min_low_seen = float("inf")
 
         for i in range(n_bars):
             bar_time = times[i]
@@ -150,6 +152,9 @@ class PessimisticExecutionSimulator:
             bar_low = lows[i]
             bar_close = closes[i]
             bars_held += 1
+
+            self._max_high_seen = max(self._max_high_seen, bar_high)
+            self._min_low_seen = min(self._min_low_seen, bar_low)
 
             t_min = bar_time.hour * 60 + bar_time.minute
 
@@ -421,7 +426,9 @@ class PessimisticExecutionSimulator:
         entry_price: float,
         exit_time: pd.Timestamp,
         exit_price: float,
-        reason: str
+        reason: str,
+        mfe_usd: Optional[float] = None,
+        mae_usd: Optional[float] = None
     ) -> CompletedTrade:
         pts = (exit_price - entry_price) * direction
         gross_pnl = pts * self.point_value * contracts
@@ -430,6 +437,31 @@ class PessimisticExecutionSimulator:
         duration_s = max(1.0, (exit_time - entry_time).total_seconds())
         duration_m = duration_s / 60.0
         r_mult = pts / signal.sl_dist if signal.sl_dist > 0 else 0.0
+
+        if mfe_usd is not None and mae_usd is not None:
+            eff_mfe = max(mfe_usd, net_pnl)
+            eff_mae = min(mae_usd, net_pnl)
+        else:
+            max_h = getattr(self, "_max_high_seen", float("-inf"))
+            min_l = getattr(self, "_min_low_seen", float("inf"))
+            if max_h > float("-inf") and min_l < float("inf"):
+                if direction == 1:
+                    pts_mfe = max(0.0, max_h - entry_price)
+                    pts_mae = min(0.0, min_l - entry_price)
+                else:
+                    pts_mfe = max(0.0, entry_price - min_l)
+                    pts_mae = min(0.0, entry_price - max_h)
+                calc_mfe = pts_mfe * self.point_value * contracts - comm
+                calc_mae = pts_mae * self.point_value * contracts - comm
+                eff_mfe = max(calc_mfe, net_pnl)
+                eff_mae = min(calc_mae, net_pnl)
+            else:
+                eff_mfe = max(0.0, net_pnl)
+                eff_mae = min(0.0, net_pnl)
+
+        meta = dict(signal.metadata) if signal.metadata else {}
+        meta["mfe_usd"] = eff_mfe
+        meta["mae_usd"] = eff_mae
 
         return CompletedTrade(
             trade_id=0,
@@ -449,5 +481,7 @@ class PessimisticExecutionSimulator:
             hold_duration_seconds=duration_s,
             hold_duration_minutes=duration_m,
             r_multiple=r_mult,
-            metadata=signal.metadata
+            mfe_usd=eff_mfe,
+            mae_usd=eff_mae,
+            metadata=meta
         )

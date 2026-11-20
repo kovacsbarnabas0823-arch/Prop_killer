@@ -30,30 +30,97 @@ logger = logging.getLogger("SessionPreprocessor")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+# Explicit CME 13:00 EST Early-Close Holiday Schedule for 2026 and 2027
+CME_EARLY_CLOSE_EXPLICIT: Dict[date, str] = {
+    # 2026 Holidays (13:00 EST / 12:00 CST Futures Early Close)
+    date(2026, 1, 19): "13:00:00",   # Martin Luther King Jr. Day
+    date(2026, 2, 16): "13:00:00",   # Presidents' Day (Washington's Birthday)
+    date(2026, 5, 25): "13:00:00",   # Memorial Day
+    date(2026, 6, 19): "13:00:00",   # Juneteenth National Independence Day
+    date(2026, 7, 3):  "13:00:00",   # Day before Independence Day
+    date(2026, 9, 7):  "13:00:00",   # Labor Day
+    date(2026, 11, 26): "13:00:00",  # Thanksgiving Day
+    date(2026, 11, 27): "13:00:00",  # Black Friday (Day after Thanksgiving)
+    date(2026, 12, 24): "13:00:00",  # Christmas Eve
+
+    # 2027 Holidays (13:00 EST / 12:00 CST Futures Early Close)
+    date(2027, 1, 18): "13:00:00",   # Martin Luther King Jr. Day
+    date(2027, 2, 15): "13:00:00",   # Presidents' Day
+    date(2027, 5, 31): "13:00:00",   # Memorial Day
+    date(2027, 6, 18): "13:00:00",   # Juneteenth observed (June 19 is Saturday)
+    date(2027, 7, 2):  "13:00:00",   # Independence Day observed (July 4 is Sunday)
+    date(2027, 9, 6):  "13:00:00",   # Labor Day
+    date(2027, 11, 25): "13:00:00",  # Thanksgiving Day
+    date(2027, 11, 26): "13:00:00",  # Black Friday
+    date(2027, 12, 24): "13:00:00",  # Christmas Eve
+}
+
 
 def is_cme_early_close(session_date: date) -> Tuple[bool, str]:
     """
     Determines if session_date is a scheduled CME early-close holiday for Equity Index Futures (NQ/MNQ).
+    Explicitly covers 2026 and 2027 calendar schedules with algorithmic fallback for other years.
     Returns (is_early_close, close_time_est_str) e.g. (True, "13:00:00") or (False, "16:00:00").
     """
+    # 1. Exact lookup from 2026-2027 verified CME calendar
+    if session_date in CME_EARLY_CLOSE_EXPLICIT:
+        return True, CME_EARLY_CLOSE_EXPLICIT[session_date]
+
     year = session_date.year
     month = session_date.month
     day = session_date.day
     weekday = session_date.weekday()  # 0 = Mon, ..., 4 = Fri
 
-    # 1. Day after Thanksgiving (Black Friday): 4th Friday of November (day 22-28)
+    # 2. General Fallback Rules:
+    # Black Friday: 4th Friday of November (day 22-28)
     if month == 11 and weekday == 4 and 22 <= day <= 28:
         return True, "13:00:00"
 
-    # 2. Christmas Eve (Dec 24): if weekday
+    # Christmas Eve (Dec 24): weekday
     if month == 12 and day == 24 and weekday < 5:
         return True, "13:00:00"
 
-    # 3. July 3rd (Day before Independence Day)
+    # July 3rd (Day before Independence Day): weekday
     if month == 7 and day == 3 and weekday < 5:
         return True, "13:00:00"
 
+    # Thanksgiving Day: 4th Thursday of November
+    if month == 11 and weekday == 3 and 22 <= day <= 28:
+        return True, "13:00:00"
+
     return False, "16:00:00"
+
+
+def check_cme_rollover_gap_guard(
+    session_date: date,
+    new_contract_has_history: bool = True
+) -> Tuple[bool, str]:
+    """
+    CME Rollover Price-Gap Guard:
+    On quarterly MNQ rollover sessions (2nd Thursday before 3rd Friday of Mar/Jun/Sep/Dec),
+    requires prior-close references to come from the new front-month contract.
+    If new contract prior-day history is unavailable on rollover morning, returns (False, reason)
+    to indicate that trading should be skipped for that single session to avoid gap corruption.
+    """
+    year = session_date.year
+    # Check if session_date is a quarterly rollover Thursday
+    is_rollover_day = False
+    for m in (3, 6, 9, 12):
+        _, roll_thu = get_cme_quarterly_rollover(year, m)
+        if session_date == roll_thu:
+            is_rollover_day = True
+            break
+
+    if not is_rollover_day:
+        return True, "Normal session (not a quarterly rollover day)."
+
+    if not new_contract_has_history:
+        return False, (
+            f"CME Rollover Price-Gap Guard: {session_date} is quarterly rollover Thursday, "
+            "but new front-month contract lacks clean prior-day reference bars. Session blocked."
+        )
+
+    return True, f"CME Rollover session {session_date}: new front-month history verified."
 
 
 def get_cme_flatten_time(session_date: date) -> str:

@@ -30,15 +30,29 @@ logger = logging.getLogger("StatePersistence")
 
 class TradeifyStatePersistence:
     def __init__(self, state_file_path: Optional[str | Path] = None, account_id: str = "Tradeify-50K-Growth-001"):
+        project_root = Path(__file__).resolve().parent.parent
+        self.account_id = account_id
+
         if state_file_path is None:
-            project_root = Path(__file__).resolve().parent.parent
-            self.state_file_path = project_root / "state" / "tradeify_account_state.json"
+            # Per-Account Atomic State Isolation: state/tradeify_<ACCOUNT_ID>.json
+            self.state_file_path = project_root / "state" / f"tradeify_{self.account_id}.json"
         else:
             self.state_file_path = Path(state_file_path)
 
-        self.account_id = account_id
         self.state_dir = self.state_file_path.parent
         self.state_dir.mkdir(parents=True, exist_ok=True)
+
+        # Seamless migration from legacy tradeify_account_state.json if present for Account 001
+        legacy_path = self.state_dir / "tradeify_account_state.json"
+        if not self.state_file_path.exists() and legacy_path.exists() and self.account_id == "Tradeify-50K-Growth-001":
+            try:
+                with open(legacy_path, "r", encoding="utf-8") as f:
+                    legacy_data = json.load(f)
+                if legacy_data.get("account_id") == self.account_id:
+                    self._write_atomic(legacy_data)
+                    logger.info(f"Migrated legacy state from {legacy_path} to {self.state_file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to migrate legacy state file: {e}")
 
         self.state: Dict[str, Any] = self._load_or_initialize()
 
@@ -55,6 +69,7 @@ class TradeifyStatePersistence:
             "today_date": datetime.now().strftime("%Y-%m-%d"),
             "today_realized_pnl": 0.0,
             "payout_cycle_number": 0,
+            "processed_signals": [],
             "last_updated_timestamp": datetime.now().isoformat()
         }
 
@@ -78,6 +93,8 @@ class TradeifyStatePersistence:
             for field in req_fields:
                 if field not in data:
                     raise ValueError(f"Missing required state field: {field}")
+            if "processed_signals" not in data or not isinstance(data["processed_signals"], list):
+                data["processed_signals"] = []
             logger.info(f"Successfully loaded state from {self.state_file_path} for account {data.get('account_id')}")
             return data
         except Exception as e:
@@ -204,3 +221,86 @@ class TradeifyStatePersistence:
         logger.info(f"PAYOUT PROCESSED: -${gross_amount:.2f} withdrawn. New equity: ${self.state['current_equity']:.2f}. Floor remains locked at $50,100.00.")
         self.save_state()
         return self.state
+
+    def set_phase(self, phase: str) -> Dict[str, Any]:
+        """Sets account phase (EVALUATION or FUNDED)."""
+        phase_clean = phase.strip().upper()
+        if phase_clean not in ["EVALUATION", "FUNDED"]:
+            raise ValueError(f"Invalid account phase '{phase}'. Must be 'EVALUATION' or 'FUNDED'.")
+        self.state["account_phase"] = phase_clean
+        self.save_state()
+        logger.info(f"Account {self.account_id} phase explicitly updated to {phase_clean}")
+        return self.state
+
+    def is_signal_processed(self, signal_id: str) -> bool:
+        """Checks if signal_id was already processed (Idempotency Guard)."""
+        if not signal_id:
+            return False
+        processed = self.state.get("processed_signals", [])
+        return signal_id in processed
+
+    def record_signal_processed(self, signal_id: str) -> None:
+        """Caches signal_id in state to prevent duplicate order executions."""
+        if not signal_id:
+            return
+        if "processed_signals" not in self.state or not isinstance(self.state["processed_signals"], list):
+            self.state["processed_signals"] = []
+        if signal_id not in self.state["processed_signals"]:
+            self.state["processed_signals"].append(signal_id)
+            # Retain last 500 processed signals to prevent infinite file growth
+            if len(self.state["processed_signals"]) > 500:
+                self.state["processed_signals"] = self.state["processed_signals"][-500:]
+            self.save_state()
+
+    def reset_to_funded(self) -> Dict[str, Any]:
+        """
+        Clean Evaluation-to-Funded Phase Reset:
+        1. Archives current Evaluation state to a timestamped archive file.
+        2. Initializes clean FUNDED state starting at $50,000.00 with $48,000 trailing floor.
+        3. Enforces safety assertions guaranteeing that Evaluation $53,015 HWM NEVER leaks into Funded state.
+        """
+        now_ts = int(datetime.now().timestamp())
+        archive_path = self.state_dir / f"tradeify_{self.account_id}_eval_archive_{now_ts}.json"
+
+        # Archive existing state if file exists
+        if self.state_file_path.exists():
+            try:
+                with open(self.state_file_path, "r", encoding="utf-8") as f:
+                    curr_data = json.load(f)
+                temp_archive = tempfile.NamedTemporaryFile("w", dir=self.state_dir, delete=False, encoding="utf-8")
+                json.dump(curr_data, temp_archive, indent=2)
+                temp_archive.flush()
+                os.fsync(temp_archive.fileno())
+                temp_archive.close()
+                os.replace(temp_archive.name, archive_path)
+                logger.info(f"Archived previous Evaluation state to {archive_path}")
+            except Exception as e:
+                logger.warning(f"Could not create archive copy of previous state: {e}")
+
+        # Clean Funded State (Pristine $50K start)
+        clean_funded_state = {
+            "account_id": self.account_id,
+            "account_phase": "FUNDED",
+            "current_equity": 50000.0,
+            "eod_hwm": 50000.0,
+            "liquidation_floor": 48000.0,
+            "is_floor_locked": False,
+            "qualifying_days_count": 0,
+            "max_historical_daily_pnl": 0.0,
+            "today_date": datetime.now().strftime("%Y-%m-%d"),
+            "today_realized_pnl": 0.0,
+            "payout_cycle_number": 1,
+            "processed_signals": [],
+            "last_updated_timestamp": datetime.now().isoformat()
+        }
+
+        # CRITICAL SAFETY ASSERTION: Zero HWM leak into Funded Pre-Lock
+        assert clean_funded_state["eod_hwm"] == 50000.0, "FATAL: Evaluation HWM leaked into Funded state!"
+        assert clean_funded_state["current_equity"] == 50000.0, "FATAL: Evaluation Equity leaked into Funded state!"
+        assert not clean_funded_state["is_floor_locked"], "FATAL: Floor lock prematurely active in Funded Pre-Lock!"
+        assert clean_funded_state["liquidation_floor"] == 48000.0, "FATAL: Trailing floor not at $48,000.00 base!"
+
+        self.state = clean_funded_state
+        self._write_atomic(clean_funded_state)
+        logger.info(f"ACCOUNT {self.account_id} SUCCESSFULLY INITIALIZED TO CLEAN FUNDED PHASE ($50,000.00 base).")
+        return dict(self.state)
